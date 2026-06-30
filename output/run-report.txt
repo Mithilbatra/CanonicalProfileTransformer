@@ -1,0 +1,22 @@
+
+Source report:
+  OK  ats.json (ats) subjects=1
+  ERR broken.json (ats) subjects=0 :: malformed JSON
+  OK  github.json (github) subjects=1
+  OK  recruiter.csv (csv) subjects=2
+  OK  recruiter_notes.txt (notes) subjects=1
+
+Resolved 2 profile(s).
+
+Wrote output/default.output.json
+
+Source report:
+  OK  ats.json (ats) subjects=1
+  ERR broken.json (ats) subjects=0 :: malformed JSON
+  OK  github.json (github) subjects=1
+  OK  recruiter.csv (csv) subjects=2
+  OK  recruiter_notes.txt (notes) subjects=1
+
+Resolved 2 profile(s).
+
+Wrote output/recruiter_shortlist.output.json

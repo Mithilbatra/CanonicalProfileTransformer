@@ -1,0 +1,266 @@
+[
+  {
+    "candidate_id": "cand_9985a9c7b49a",
+    "full_name": "Jordan A. Rivera",
+    "emails": [
+      "jordan.rivera@example.com"
+    ],
+    "phones": [
+      "+14155550132"
+    ],
+    "location": {
+      "city": "San Francisco",
+      "region": "CA",
+      "country": "US"
+    },
+    "links": {
+      "linkedin": "https://www.linkedin.com/in/jordanrivera",
+      "github": "https://github.com/jrivera-dev",
+      "portfolio": "https://jordanrivera.dev",
+      "other": []
+    },
+    "headline": "Senior Software Engineer",
+    "years_experience": 8,
+    "skills": [
+      {
+        "name": "Python",
+        "confidence": 0.93,
+        "sources": [
+          "ats",
+          "github",
+          "notes"
+        ]
+      },
+      {
+        "name": "Kubernetes",
+        "confidence": 0.87,
+        "sources": [
+          "ats"
+        ]
+      },
+      {
+        "name": "PostgreSQL",
+        "confidence": 0.87,
+        "sources": [
+          "ats"
+        ]
+      },
+      {
+        "name": "REST",
+        "confidence": 0.87,
+        "sources": [
+          "ats"
+        ]
+      },
+      {
+        "name": "Go",
+        "confidence": 0.83,
+        "sources": [
+          "github",
+          "notes"
+        ]
+      },
+      {
+        "name": "Rust",
+        "confidence": 0.8,
+        "sources": [
+          "github"
+        ]
+      },
+      {
+        "name": "Shell",
+        "confidence": 0.64,
+        "sources": [
+          "github"
+        ]
+      },
+      {
+        "name": "React",
+        "confidence": 0.28,
+        "sources": [
+          "notes"
+        ]
+      }
+    ],
+    "experience": [
+      {
+        "company": "Northwind Labs",
+        "title": "Senior Backend Engineer",
+        "start": "2021-03",
+        "end": null,
+        "summary": "Owns the candidate ingestion platform."
+      },
+      {
+        "company": "Initech",
+        "title": "Software Engineer",
+        "start": "2018-06",
+        "end": "2021-02",
+        "summary": null
+      }
+    ],
+    "education": [
+      {
+        "institution": "University of California, Berkeley",
+        "degree": "B.S.",
+        "field": "Computer Science",
+        "end_year": 2017
+      }
+    ],
+    "provenance": [
+      {
+        "field": "full_name",
+        "source": "ats.json#0",
+        "method": "ats:candidateName"
+      },
+      {
+        "field": "headline",
+        "source": "ats.json#0",
+        "method": "ats:currentTitle"
+      },
+      {
+        "field": "years_experience",
+        "source": "ats.json#0",
+        "method": "ats:yearsOfExperience"
+      },
+      {
+        "field": "emails[jordan.rivera@example.com]",
+        "source": "ats.json#0",
+        "method": "ats:emailAddress"
+      },
+      {
+        "field": "phones[+14155550132]",
+        "source": "ats.json#0",
+        "method": "ats:phoneNumber"
+      },
+      {
+        "field": "location",
+        "source": "ats.json#0",
+        "method": "ats:location"
+      },
+      {
+        "field": "links.linkedin",
+        "source": "ats.json#0",
+        "method": "ats:linkedinUrl"
+      },
+      {
+        "field": "links.github",
+        "source": "ats.json#0",
+        "method": "ats:githubUrl"
+      },
+      {
+        "field": "links.portfolio",
+        "source": "github.json",
+        "method": "github:blog"
+      },
+      {
+        "field": "skills.Python",
+        "source": "ats+github+notes",
+        "method": "aggregated"
+      },
+      {
+        "field": "skills.Kubernetes",
+        "source": "ats",
+        "method": "aggregated"
+      },
+      {
+        "field": "skills.PostgreSQL",
+        "source": "ats",
+        "method": "aggregated"
+      },
+      {
+        "field": "skills.REST",
+        "source": "ats",
+        "method": "aggregated"
+      },
+      {
+        "field": "skills.Go",
+        "source": "github+notes",
+        "method": "aggregated"
+      },
+      {
+        "field": "skills.Rust",
+        "source": "github",
+        "method": "aggregated"
+      },
+      {
+        "field": "skills.Shell",
+        "source": "github",
+        "method": "aggregated"
+      },
+      {
+        "field": "skills.React",
+        "source": "notes",
+        "method": "aggregated"
+      },
+      {
+        "field": "experience@Northwind Labs",
+        "source": "ats.json#0",
+        "method": "ats:workHistory"
+      },
+      {
+        "field": "experience@Initech",
+        "source": "ats.json#0",
+        "method": "ats:workHistory"
+      },
+      {
+        "field": "education@University of California, Berkeley",
+        "source": "ats.json#0",
+        "method": "ats:education"
+      }
+    ],
+    "overall_confidence": 0.93
+  },
+  {
+    "candidate_id": "cand_a039fdde8c4b",
+    "full_name": "Casey Tan",
+    "emails": [
+      "casey.tan@example.com"
+    ],
+    "phones": [
+      "+442079460991"
+    ],
+    "location": null,
+    "links": {
+      "linkedin": null,
+      "github": null,
+      "portfolio": null,
+      "other": []
+    },
+    "headline": null,
+    "years_experience": null,
+    "skills": null,
+    "experience": [
+      {
+        "company": "Globex",
+        "title": "Product Designer",
+        "start": null,
+        "end": null,
+        "summary": null
+      }
+    ],
+    "education": null,
+    "provenance": [
+      {
+        "field": "full_name",
+        "source": "recruiter.csv#row1",
+        "method": "csv:name_column"
+      },
+      {
+        "field": "emails[casey.tan@example.com]",
+        "source": "recruiter.csv#row1",
+        "method": "csv:email_column"
+      },
+      {
+        "field": "phones[+442079460991]",
+        "source": "recruiter.csv#row1",
+        "method": "csv:phone_column"
+      },
+      {
+        "field": "experience@Globex",
+        "source": "recruiter.csv#row1",
+        "method": "csv:current_role"
+      }
+    ],
+    "overall_confidence": 0.73
+  }
+]

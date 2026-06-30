@@ -1,0 +1,22 @@
+{
+  "candidates": [
+    {
+      "candidateName": "Priya S. Nair",
+      "emailAddress": "priya.nair@example.in",
+      "phoneNumber": "+919876543210",
+      "location": "Bengaluru, Karnataka, India",
+      "currentTitle": "Senior Data Engineer",
+      "yearsOfExperience": 6,
+      "skillSet": ["python", "Apache Spark", "sql", "aws"],
+      "workHistory": [
+        { "company": "Flipkart", "title": "Senior Data Engineer", "startDate": "2021-04", "endDate": "Present" },
+        { "company": "Zomato", "title": "Data Engineer", "startDate": "06/2018", "endDate": "03/2021" }
+      ],
+      "education": [
+        { "school": "IIT Madras", "degree": "B.Tech", "field": "Computer Science", "endYear": 2016 }
+      ],
+      "linkedinUrl": "https://www.linkedin.com/in/priya-nair-data",
+      "githubUrl": "github.com/priya-codes"
+    }
+  ]
+}

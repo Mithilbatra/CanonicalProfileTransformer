@@ -1,0 +1,8 @@
+Call notes - 2025/11/12
+
+Name: Jordan Rivera
+Spoke with Jordan re: the backend role. ~8 years experience, currently works at Northwind Labs.
+Strong on Python and Go; has been picking up React on the side for an internal tool.
+Reachable at jordan.rivera@example.com or 415-555-0132 (mobile).
+Mentioned interest in distributed systems. Open to relocating from the Bay Area.
+Follow up next week.

@@ -1,0 +1,38 @@
+{
+  "candidates": [
+    {
+      "candidateName": "Jordan A. Rivera",
+      "emailAddress": "jordan.rivera@example.com",
+      "phoneNumber": "+14155550132",
+      "location": "San Francisco, CA, USA",
+      "currentTitle": "Senior Software Engineer",
+      "yearsOfExperience": 8,
+      "skillSet": ["Python", "PostgreSQL", "kubernetes", "REST APIs"],
+      "workHistory": [
+        {
+          "company": "Northwind Labs",
+          "title": "Senior Backend Engineer",
+          "startDate": "March 2021",
+          "endDate": "Present",
+          "description": "Owns the candidate ingestion platform."
+        },
+        {
+          "company": "Initech",
+          "title": "Software Engineer",
+          "startDate": "2018-06",
+          "endDate": "2021-02"
+        }
+      ],
+      "education": [
+        {
+          "school": "University of California, Berkeley",
+          "degree": "B.S.",
+          "fieldOfStudy": "Computer Science",
+          "graduationYear": 2017
+        }
+      ],
+      "linkedinUrl": "https://www.linkedin.com/in/jordanrivera/",
+      "githubUrl": "github.com/jrivera-dev"
+    }
+  ]
+}

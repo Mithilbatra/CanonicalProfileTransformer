@@ -1,0 +1,14 @@
+{
+  "profileUrl": "https://www.linkedin.com/in/priya-nair-data",
+  "name": "Priya Nair",
+  "headline": "Senior Data Engineer at Flipkart | Spark & Airflow",
+  "location": "Bengaluru, India",
+  "positions": [
+    { "companyName": "Flipkart", "title": "Senior Data Engineer", "startDate": { "year": 2021, "month": 4 }, "endDate": null, "description": "Owns the batch + streaming data platform." },
+    { "companyName": "Zomato", "title": "Data Engineer", "startDate": { "year": 2018, "month": 6 }, "endDate": { "year": 2021, "month": 3 } }
+  ],
+  "education": [
+    { "schoolName": "IIT Madras", "degreeName": "B.Tech", "fieldOfStudy": "Computer Science", "endDate": { "year": 2016 } }
+  ],
+  "skills": ["Python", "Apache Spark", "Airflow", "AWS"]
+}

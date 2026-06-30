@@ -1,0 +1,268 @@
+[
+  {
+    "candidate_id": "cand_890860a289c3",
+    "full_name": "Priya S. Nair",
+    "emails": [
+      "priya.nair@example.in"
+    ],
+    "phones": [
+      "+919876543210"
+    ],
+    "location": {
+      "city": "Bengaluru",
+      "region": "Karnataka",
+      "country": "IN"
+    },
+    "links": {
+      "linkedin": "https://www.linkedin.com/in/priya-nair-data",
+      "github": "https://github.com/priya-codes",
+      "portfolio": "https://priyanair.dev",
+      "other": []
+    },
+    "headline": "Senior Data Engineer",
+    "years_experience": 6,
+    "skills": [
+      {
+        "name": "Python",
+        "confidence": 0.95,
+        "sources": [
+          "ats",
+          "github",
+          "linkedin",
+          "notes"
+        ]
+      },
+      {
+        "name": "AWS",
+        "confidence": 0.91,
+        "sources": [
+          "ats",
+          "linkedin"
+        ]
+      },
+      {
+        "name": "SQL",
+        "confidence": 0.87,
+        "sources": [
+          "ats"
+        ]
+      },
+      {
+        "name": "Apache Spark",
+        "confidence": 0.73,
+        "sources": [
+          "ats",
+          "linkedin"
+        ]
+      },
+      {
+        "name": "Jupyter Notebook",
+        "confidence": 0.64,
+        "sources": [
+          "github"
+        ]
+      },
+      {
+        "name": "Scala",
+        "confidence": 0.64,
+        "sources": [
+          "github"
+        ]
+      },
+      {
+        "name": "Shell",
+        "confidence": 0.64,
+        "sources": [
+          "github"
+        ]
+      },
+      {
+        "name": "Airflow",
+        "confidence": 0.51,
+        "sources": [
+          "linkedin"
+        ]
+      }
+    ],
+    "experience": [
+      {
+        "company": "Flipkart",
+        "title": "Senior Data Engineer",
+        "start": "2021-04",
+        "end": null,
+        "summary": "Owns the batch + streaming data platform."
+      },
+      {
+        "company": "Zomato",
+        "title": "Data Engineer",
+        "start": "2018-06",
+        "end": "2021-03",
+        "summary": null
+      }
+    ],
+    "education": [
+      {
+        "institution": "IIT Madras",
+        "degree": "B.Tech",
+        "field": "Computer Science",
+        "end_year": 2016
+      }
+    ],
+    "provenance": [
+      {
+        "field": "full_name",
+        "source": "ats.json#0",
+        "method": "ats:candidateName"
+      },
+      {
+        "field": "headline",
+        "source": "ats.json#0",
+        "method": "ats:currentTitle"
+      },
+      {
+        "field": "years_experience",
+        "source": "ats.json#0",
+        "method": "ats:yearsOfExperience"
+      },
+      {
+        "field": "emails[priya.nair@example.in]",
+        "source": "ats.json#0",
+        "method": "ats:emailAddress"
+      },
+      {
+        "field": "phones[+919876543210]",
+        "source": "ats.json#0",
+        "method": "ats:phoneNumber"
+      },
+      {
+        "field": "location",
+        "source": "ats.json#0",
+        "method": "ats:location"
+      },
+      {
+        "field": "links.linkedin",
+        "source": "ats.json#0",
+        "method": "ats:linkedinUrl"
+      },
+      {
+        "field": "links.github",
+        "source": "ats.json#0",
+        "method": "ats:githubUrl"
+      },
+      {
+        "field": "links.portfolio",
+        "source": "github.json",
+        "method": "github:blog"
+      },
+      {
+        "field": "skills.Python",
+        "source": "ats+github+linkedin+notes",
+        "method": "aggregated"
+      },
+      {
+        "field": "skills.AWS",
+        "source": "ats+linkedin",
+        "method": "aggregated"
+      },
+      {
+        "field": "skills.SQL",
+        "source": "ats",
+        "method": "aggregated"
+      },
+      {
+        "field": "skills.Apache Spark",
+        "source": "ats+linkedin",
+        "method": "aggregated"
+      },
+      {
+        "field": "skills.Jupyter Notebook",
+        "source": "github",
+        "method": "aggregated"
+      },
+      {
+        "field": "skills.Scala",
+        "source": "github",
+        "method": "aggregated"
+      },
+      {
+        "field": "skills.Shell",
+        "source": "github",
+        "method": "aggregated"
+      },
+      {
+        "field": "skills.Airflow",
+        "source": "linkedin",
+        "method": "aggregated"
+      },
+      {
+        "field": "experience@Flipkart",
+        "source": "ats.json#0",
+        "method": "ats:workHistory"
+      },
+      {
+        "field": "experience@Zomato",
+        "source": "ats.json#0",
+        "method": "ats:workHistory"
+      },
+      {
+        "field": "education@IIT Madras",
+        "source": "ats.json#0",
+        "method": "ats:education"
+      }
+    ],
+    "overall_confidence": 0.93
+  },
+  {
+    "candidate_id": "cand_ce7975616e4d",
+    "full_name": "Arjun Mehta",
+    "emails": [
+      "arjun.mehta@example.in"
+    ],
+    "phones": [
+      "+919000011111"
+    ],
+    "location": null,
+    "links": {
+      "linkedin": null,
+      "github": null,
+      "portfolio": null,
+      "other": []
+    },
+    "headline": null,
+    "years_experience": null,
+    "skills": null,
+    "experience": [
+      {
+        "company": "Razorpay",
+        "title": "Frontend Engineer",
+        "start": null,
+        "end": null,
+        "summary": null
+      }
+    ],
+    "education": null,
+    "provenance": [
+      {
+        "field": "full_name",
+        "source": "recruiter.csv#row1",
+        "method": "csv:name_column"
+      },
+      {
+        "field": "emails[arjun.mehta@example.in]",
+        "source": "recruiter.csv#row1",
+        "method": "csv:email_column"
+      },
+      {
+        "field": "phones[+919000011111]",
+        "source": "recruiter.csv#row1",
+        "method": "csv:phone_column"
+      },
+      {
+        "field": "experience@Razorpay",
+        "source": "recruiter.csv#row1",
+        "method": "csv:current_role"
+      }
+    ],
+    "overall_confidence": 0.73
+  }
+]

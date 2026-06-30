@@ -1,0 +1,21 @@
+{
+  "name": "canonical-profile-transformer",
+  "version": "1.0.0",
+  "description": "Transforms messy multi-source candidate data into one trustworthy, deterministic, traceable canonical profile.",
+  "license": "MIT",
+  "type": "commonjs",
+  "bin": {
+    "profile-transform": "./server/cli.js"
+  },
+  "scripts": {
+    "start": "node server/index.js",
+    "cli": "node server/cli.js",
+    "test": "node --test test/*.test.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.21.2",
+    "libphonenumber-js": "^1.11.20",
+    "papaparse": "^5.4.1"
+  }
+}

@@ -1,0 +1,31 @@
+[
+  {
+    "full_name": "Jordan A. Rivera",
+    "primary_email": "jordan.rivera@example.com",
+    "phone": "+14155550132",
+    "country": "US",
+    "headline": "Senior Software Engineer",
+    "skills": [
+      "Python",
+      "Kubernetes",
+      "PostgreSQL",
+      "REST",
+      "Go",
+      "Rust",
+      "Shell",
+      "React"
+    ],
+    "github": "https://github.com/jrivera-dev",
+    "overall_confidence": 0.93
+  },
+  {
+    "full_name": "Casey Tan",
+    "primary_email": "casey.tan@example.com",
+    "phone": "+442079460991",
+    "country": null,
+    "headline": null,
+    "skills": null,
+    "github": null,
+    "overall_confidence": 0.73
+  }
+]

@@ -1,0 +1,5 @@
+Call notes - 28 June
+
+Spoke with Priya Nair. Around 6 years in data engineering, currently at Flipkart in Bengaluru.
+Strong on Python and Spark, has been picking up Airflow. Reachable at priya.nair@example.in
+or +91 98765 43210. Open to senior platform roles.

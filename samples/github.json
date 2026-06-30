@@ -1,0 +1,19 @@
+{
+  "user": {
+    "login": "jrivera-dev",
+    "name": "Jordan Rivera",
+    "bio": "Backend engineer. Distributed systems & data pipelines.",
+    "location": "SF Bay Area",
+    "blog": "jordanrivera.dev",
+    "html_url": "https://github.com/jrivera-dev",
+    "email": null,
+    "public_repos": 23
+  },
+  "repos": [
+    { "name": "ingest-core", "language": "Go" },
+    { "name": "profile-merger", "language": "Python" },
+    { "name": "schema-tools", "language": "Python" },
+    { "name": "edge-cache", "language": "Rust" }
+  ],
+  "languages": { "Go": 5, "Python": 8, "Rust": 2, "Shell": 1 }
+}

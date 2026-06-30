@@ -1,0 +1,12 @@
+{
+  "user": {
+    "login": "priya-codes",
+    "name": "Priya Nair",
+    "bio": "Data engineer. Spark, pipelines, and the occasional notebook.",
+    "location": "Bangalore",
+    "blog": "priyanair.dev",
+    "html_url": "https://github.com/priya-codes",
+    "email": null
+  },
+  "languages": { "Python": 12, "Scala": 4, "Jupyter Notebook": 3, "Shell": 2 }
+}

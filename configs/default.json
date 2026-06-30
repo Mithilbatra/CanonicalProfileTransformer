@@ -1,0 +1,20 @@
+{
+  "name": "default",
+  "description": "Full canonical schema, 1:1 with the internal record.",
+  "fields": [
+    { "path": "candidate_id", "type": "string", "required": true },
+    { "path": "full_name", "type": "string" },
+    { "path": "emails", "from": "emails", "type": "string[]" },
+    { "path": "phones", "from": "phones", "type": "string[]" },
+    { "path": "location", "type": "object" },
+    { "path": "links", "type": "object" },
+    { "path": "headline", "type": "string" },
+    { "path": "years_experience", "type": "number" },
+    { "path": "skills", "type": "array" },
+    { "path": "experience", "type": "array" },
+    { "path": "education", "type": "array" }
+  ],
+  "include_confidence": true,
+  "include_provenance": true,
+  "on_missing": "null"
+}
