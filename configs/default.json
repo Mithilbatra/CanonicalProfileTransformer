@@ -12,7 +12,11 @@
     { "path": "years_experience", "type": "number" },
     { "path": "skills", "type": "array" },
     { "path": "experience", "type": "array" },
-    { "path": "education", "type": "array" }
+    { "path": "education", "type": "array" },
+    { "path": "projects", "type": "array" },
+    { "path": "certifications", "type": "array" },
+    { "path": "activities", "type": "string[]" },
+    { "path": "coursework", "type": "string[]" }
   ],
   "include_confidence": true,
   "include_provenance": true,

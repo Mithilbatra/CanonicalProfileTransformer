@@ -4,6 +4,13 @@ const crypto = require('crypto');
 const N = require('./normalize');
 const { canonicalizeSkill } = require('./skills');
 const { sourceWeight, scalarConfidence, skillConfidence, overallConfidence } = require('./confidence');
+const { nameSimilarity } = require('./fuzzy');
+
+// Fuzzy-name matching: two subjects merge when their names are at least this
+// similar AND a corroborating signal agrees (same company or same city).
+// Name similarity alone never merges — the engine's rule that two people may
+// share a name applies to near-identical names too.
+const FUZZY_NAME_MIN = 0.88;
 
 function mergeAll(sourceResults) {
   const subjects = [];
@@ -51,6 +58,17 @@ function resolveEntities(subjects) {
     if (key.startsWith('nc:')) for (let k = 1; k < group.length; k++) union(group[0], group[k]);
   }
 
+  // fuzzy pass: catch spelling drift the exact keys miss ("Jordan Rivera"
+  // vs "Jordn Rivera"). Conservative on purpose — a wrong merge is worse
+  // than a missed one, so conflicting emails/phones always block it.
+  const traits = subjects.map(subjectTraits);
+  for (let i = 0; i < subjects.length; i++) {
+    for (let j = i + 1; j < subjects.length; j++) {
+      if (find(i) === find(j)) continue;
+      if (fuzzySameEntity(traits[i], traits[j])) union(i, j);
+    }
+  }
+
   const byRoot = new Map();
   subjects.forEach((s, i) => {
     const r = find(i);
@@ -58,6 +76,80 @@ function resolveEntities(subjects) {
     byRoot.get(r).push(s);
   });
   return [...byRoot.values()];
+}
+
+// Index keys for one subject, used by the store for incremental merging:
+// two subjects can only ever end up in the same cluster if they share at
+// least one of these keys. Strong keys and the name+company weak key mirror
+// resolveEntities exactly; the "nb:" name-block keys (first 3 letters of
+// each name token) over-approximate the fuzzy pass — fuzzy needs name
+// similarity >= 0.88, which in practice always shares a 3-letter token
+// prefix. Over-approximating is safe: a too-wide block only means a few
+// extra subjects get re-merged, never a missed merge.
+function subjectKeys(s) {
+  const keys = new Set();
+  s.identity.emails.map((e) => N.normalizeEmail(e)).filter(Boolean).forEach((e) => keys.add(`email:${e}`));
+  s.identity.phones.map((p) => N.normalizePhone(p)).filter(Boolean).forEach((p) => keys.add(`phone:${p}`));
+  s.observations
+    .filter((o) => o.field === 'link')
+    .map((o) => N.classifyLink(o.value))
+    .filter((c) => c && (c.kind === 'github' || c.kind === 'linkedin'))
+    .forEach((c) => keys.add(`link:${c.kind}:${c.url.toLowerCase()}`));
+
+  const names = s.identity.names.map((n) => normName(n)).filter(Boolean);
+  const companies = s.observations
+    .filter((o) => o.field === 'experience_entry' && o.value && o.value.company)
+    .map((o) => normName(o.value.company))
+    .filter(Boolean);
+  for (const nm of names) {
+    for (const c of companies) keys.add(`nc:${nm}|${c}`);
+    for (const tok of nm.split(' ')) {
+      if (tok.length >= 3) keys.add(`nb:${tok.slice(0, 3)}`);
+    }
+  }
+  return [...keys];
+}
+
+// Identity signals used by the fuzzy pass, pulled out of a subject once.
+function subjectTraits(s) {
+  return {
+    names: s.identity.names.map((n) => N.normalizeName(n)).filter(Boolean),
+    emails: new Set(s.identity.emails.map((e) => N.normalizeEmail(e)).filter(Boolean)),
+    phones: new Set(s.identity.phones.map((p) => N.normalizePhone(p)).filter(Boolean)),
+    companies: new Set(
+      s.observations
+        .filter((o) => o.field === 'experience_entry' && o.value && o.value.company)
+        .map((o) => normName(o.value.company))
+        .filter(Boolean)
+    ),
+    cities: new Set(
+      s.observations
+        .filter((o) => o.field === 'location')
+        .map((o) => N.normalizeLocation(o.value))
+        .filter((l) => l && l.city)
+        .map((l) => l.city.toLowerCase())
+    ),
+  };
+}
+
+function fuzzySameEntity(a, b) {
+  if (!a.names.length || !b.names.length) return false;
+
+  // hard block: both sides carry contact identity and none of it matches —
+  // these are different people who happen to share a similar name
+  if (a.emails.size && b.emails.size && !intersects(a.emails, b.emails)) return false;
+  if (a.phones.size && b.phones.size && !intersects(a.phones, b.phones)) return false;
+
+  let best = 0;
+  for (const na of a.names) for (const nb of b.names) best = Math.max(best, nameSimilarity(na, nb));
+
+  if (best < FUZZY_NAME_MIN) return false;
+  return intersects(a.companies, b.companies) || intersects(a.cities, b.cities);
+}
+
+function intersects(setA, setB) {
+  for (const x of setA) if (setB.has(x)) return true;
+  return false;
 }
 
 function buildRecord(cluster) {
@@ -87,6 +179,10 @@ function buildRecord(cluster) {
     skills: [],
     experience: [],
     education: [],
+    projects: [],
+    certifications: [],
+    activities: [],
+    coursework: [],
     provenance,
     overall_confidence: 0,
   };
@@ -210,6 +306,41 @@ function buildRecord(cluster) {
     if (record.education.length) fieldConf.education = 0.8;
   }
 
+  if (byField.project_entry) {
+    const seen = new Set();
+    for (const o of byField.project_entry) {
+      const v = o.value || {};
+      if (!v.name) continue;
+      const key = String(v.name).toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      record.projects.push({
+        name: v.name,
+        technologies: Array.isArray(v.technologies) ? v.technologies : [],
+        summary: v.summary || null,
+      });
+      provenance.push({ field: `projects@${v.name}`, source: o.sourceId, method: o.method });
+    }
+    if (record.projects.length) fieldConf.projects = 0.8;
+  }
+
+  if (byField.certification_entry) {
+    const seen = new Set();
+    for (const o of byField.certification_entry) {
+      const v = o.value || {};
+      if (!v.name) continue;
+      const key = String(v.name).toLowerCase();
+      if (seen.has(key)) continue;
+      seen.add(key);
+      record.certifications.push({ name: v.name, issuer: v.issuer || null, summary: v.summary || null });
+      provenance.push({ field: `certifications@${v.name}`, source: o.sourceId, method: o.method });
+    }
+    if (record.certifications.length) fieldConf.certifications = 0.8;
+  }
+
+  resolveTextList('activities', byField.activity, record, provenance, fieldConf);
+  resolveTextList('coursework', byField.coursework, record, provenance, fieldConf);
+
   record.candidate_id = makeId(record);
   record.overall_confidence = overallConfidence(record, fieldConf);
   Object.defineProperty(record, '__fieldConfidence', { value: fieldConf, enumerable: false });
@@ -240,6 +371,25 @@ function resolveList(field, obsList, normFn, record, provenance, fieldConf) {
   for (const [val, o] of map) provenance.push({ field: `${field}[${val}]`, source: o.sourceId, method: o.method });
   const confs = [...map.values()].map((o) => scalarConfidence(o.weight, []));
   fieldConf[field] = Math.max(...confs);
+}
+
+// Plain-string list fields (activities, coursework): dedupe case-insensitively,
+// keep first-seen original casing, one provenance entry per source.
+function resolveTextList(field, obsList, record, provenance, fieldConf) {
+  if (!obsList) return;
+  const seen = new Set();
+  const sources = new Set();
+  for (const o of obsList) {
+    const v = typeof o.value === 'string' ? o.value.trim() : '';
+    if (!v || seen.has(v.toLowerCase())) continue;
+    seen.add(v.toLowerCase());
+    record[field].push(v);
+    sources.add(o.sourceId);
+  }
+  if (record[field].length) {
+    for (const src of sources) provenance.push({ field, source: src, method: 'aggregated' });
+    fieldConf[field] = 0.75;
+  }
 }
 
 function pickWinner(cands) {
@@ -358,4 +508,4 @@ function completeness(loc) { return (loc.city ? 1 : 0) + (loc.region ? 1 : 0) + 
 function sameLoc(a, b) { return a.city === b.city && a.country === b.country; }
 function round(x) { return Math.round(x * 100) / 100; }
 
-module.exports = { mergeAll, resolveEntities, buildRecord };
+module.exports = { mergeAll, resolveEntities, buildRecord, subjectKeys };

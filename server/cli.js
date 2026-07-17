@@ -4,6 +4,7 @@
 const fs = require('fs');
 const path = require('path');
 const { runPipeline } = require('./engine/pipeline');
+const { bufferToText, isBinaryName } = require('./lib/filetext');
 
 function parseArgs(argv) {
   const args = { in: [], config: null, out: null, network: false, quiet: false };
@@ -26,7 +27,7 @@ Usage:
   node server/cli.js --in <files...> [--config <file>] [--out <file>] [--network] [--quiet]
 
 Options:
-  --in        One or more input files (csv, json, txt, github blob).
+  --in        One or more input files (csv, json, txt, pdf/docx resume, github blob).
   --config    Output config (default: configs/default.json).
   --out       Write JSON here instead of stdout.
   --network   Allow live GitHub API fetch for github URL sources.
@@ -54,13 +55,22 @@ async function main() {
     }
   }
 
-  const sources = inputFiles.map((file) => {
+  const sources = [];
+  for (const file of inputFiles) {
+    const name = path.basename(file);
     try {
-      return { name: path.basename(file), content: fs.readFileSync(file, 'utf8') };
+      if (isBinaryName(name)) {
+        // PDF / DOCX / image resumes: convert to plain text before the
+        // pipeline; PDFs also yield their hyperlink annotations
+        const { text, links } = await bufferToText(fs.readFileSync(file), name);
+        sources.push({ name, content: text, links });
+      } else {
+        sources.push({ name, content: fs.readFileSync(file, 'utf8') });
+      }
     } catch (e) {
-      return { name: path.basename(file), content: '', _readError: e.message };
+      sources.push({ name, content: '', _readError: e.message });
     }
-  });
+  }
 
   const config = args.config
     ? JSON.parse(fs.readFileSync(args.config, 'utf8'))

@@ -75,6 +75,13 @@
         ]
       },
       {
+        "name": "Next.js",
+        "confidence": 0.28,
+        "sources": [
+          "notes"
+        ]
+      },
+      {
         "name": "React",
         "confidence": 0.28,
         "sources": [
@@ -106,6 +113,10 @@
         "end_year": 2017
       }
     ],
+    "projects": null,
+    "certifications": null,
+    "activities": null,
+    "coursework": null,
     "provenance": [
       {
         "field": "full_name",
@@ -188,6 +199,11 @@
         "method": "aggregated"
       },
       {
+        "field": "skills.Next.js",
+        "source": "notes",
+        "method": "aggregated"
+      },
+      {
         "field": "skills.React",
         "source": "notes",
         "method": "aggregated"
@@ -208,7 +224,7 @@
         "method": "ats:education"
       }
     ],
-    "overall_confidence": 0.93
+    "overall_confidence": 0.92
   },
   {
     "candidate_id": "cand_a039fdde8c4b",
@@ -239,6 +255,10 @@
       }
     ],
     "education": null,
+    "projects": null,
+    "certifications": null,
+    "activities": null,
+    "coursework": null,
     "provenance": [
       {
         "field": "full_name",

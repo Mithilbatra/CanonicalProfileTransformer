@@ -43,6 +43,20 @@ function validateCanonical(record) {
     if (x.end_year != null && (typeof x.end_year !== 'number')) e(`education[${i}].end_year must be number|null`);
   });
 
+  if (!Array.isArray(record.projects)) e('projects must be an array');
+  else record.projects.forEach((p, i) => {
+    if (typeof p.name !== 'string' || !p.name) e(`projects[${i}].name must be a non-empty string`);
+    if (!Array.isArray(p.technologies)) e(`projects[${i}].technologies must be an array`);
+  });
+  if (!Array.isArray(record.certifications)) e('certifications must be an array');
+  else record.certifications.forEach((c, i) => {
+    if (typeof c.name !== 'string' || !c.name) e(`certifications[${i}].name must be a non-empty string`);
+  });
+  if (!Array.isArray(record.activities)) e('activities must be an array');
+  else record.activities.forEach((a, i) => { if (typeof a !== 'string') e(`activities[${i}] must be a string`); });
+  if (!Array.isArray(record.coursework)) e('coursework must be an array');
+  else record.coursework.forEach((c, i) => { if (typeof c !== 'string') e(`coursework[${i}] must be a string`); });
+
   if (!Array.isArray(record.provenance)) e('provenance must be an array');
   if (typeof record.overall_confidence !== 'number' || record.overall_confidence < 0 || record.overall_confidence > 1) {
     e('overall_confidence must be a number in [0,1]');

@@ -13,10 +13,11 @@
       "Go",
       "Rust",
       "Shell",
+      "Next.js",
       "React"
     ],
     "github": "https://github.com/jrivera-dev",
-    "overall_confidence": 0.93
+    "overall_confidence": 0.92
   },
   {
     "full_name": "Casey Tan",

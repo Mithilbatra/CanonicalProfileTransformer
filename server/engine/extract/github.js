@@ -1,6 +1,7 @@
 'use strict';
 
 const { obs, subject } = require('./_common');
+const { fetchJson } = require('../../lib/fetcher');
 
 function extractGithub(data, sourceId = 'github') {
   if (!data || typeof data !== 'object') {
@@ -53,17 +54,19 @@ async function fetchGithub(usernameOrUrl) {
   if (!username) throw new Error('could not parse github username');
 
   const headers = { 'User-Agent': 'profile-transformer', Accept: 'application/vnd.github+json' };
-  const userRes = await fetch(`https://api.github.com/users/${encodeURIComponent(username)}`, { headers });
-  if (!userRes.ok) throw new Error(`github user fetch ${userRes.status}`);
-  const user = await userRes.json();
+  if (process.env.GITHUB_TOKEN) headers.Authorization = `Bearer ${process.env.GITHUB_TOKEN}`;
+
+  // fetchJson adds timeout, retry-with-backoff and a short TTL cache,
+  // so repeated runs against the same handle don't hang or burn rate limits.
+  const user = await fetchJson(`https://api.github.com/users/${encodeURIComponent(username)}`, { headers });
 
   let repos = [];
   try {
-    const reposRes = await fetch(
+    repos = await fetchJson(
       `https://api.github.com/users/${encodeURIComponent(username)}/repos?per_page=100&sort=pushed`,
       { headers }
     );
-    if (reposRes.ok) repos = await reposRes.json();
+    if (!Array.isArray(repos)) repos = [];
   } catch (_) {
     /* best-effort */
   }

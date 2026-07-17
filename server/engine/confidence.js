@@ -14,7 +14,7 @@ const FIELD_AFFINITY = {
   csv:    { contact: 1.0, name: 1.0, experience: 0.85, skills: 0.7 },
   github: { skills: 1.0, links: 1.0, name: 0.9, contact: 0.6, location: 0.85, headline: 0.9 },
   linkedin: { experience: 1.0, headline: 1.0, education: 0.95, skills: 0.85 },
-  resume: { experience: 0.9, education: 0.9, skills: 0.85, contact: 0.8 },
+  resume: { experience: 0.9, education: 0.9, skills: 0.85, contact: 0.8, projects: 0.9, certifications: 0.9, activities: 0.85, coursework: 0.9 },
   notes:  { skills: 0.5, contact: 0.7, name: 0.6, experience: 0.5 },
 };
 
@@ -29,6 +29,10 @@ const FIELD_GROUP = {
   experience_entry: 'experience', experience: 'experience',
   education_entry: 'education', education: 'education',
   link: 'links', links: 'links',
+  project_entry: 'projects', projects: 'projects',
+  certification_entry: 'certifications', certifications: 'certifications',
+  activity: 'activities', activities: 'activities',
+  coursework: 'coursework',
 };
 
 function sourceWeight(sourceType, field) {

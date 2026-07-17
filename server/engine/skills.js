@@ -38,6 +38,20 @@ const CANON = {
   Django: ['django'],
   Flask: ['flask'],
   Express: ['express', 'expressjs', 'express.js'],
+  C: ['c'],
+  Cassandra: ['cassandra', 'apache cassandra'],
+  'Next.js': ['next', 'nextjs', 'next.js', 'next js'],
+  'Tailwind CSS': ['tailwind', 'tailwindcss', 'tailwind css'],
+  Figma: ['figma'],
+  OpenCV: ['opencv', 'open cv'],
+  Postman: ['postman'],
+  AI: ['ai', 'artificial intelligence'],
+  NLP: ['nlp', 'natural language processing'],
+  'Computer Vision': ['computer vision'],
+  LLM: ['llm', 'llms', 'large language models'],
+  RAG: ['rag', 'retrieval augmented generation', 'retrieval-augmented generation'],
+  OOP: ['oop', 'oops', 'object oriented programming', 'object-oriented programming'],
+  'Design Patterns': ['design patterns'],
 };
 
 const ALIAS_TO_CANON = (() => {

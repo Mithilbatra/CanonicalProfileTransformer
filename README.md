@@ -12,7 +12,8 @@ The engine never invents values; an unknown stays `null`.
 ## What it does
 
 - Ingests **structured** sources (recruiter CSV, ATS JSON with foreign field names)
-  and **unstructured** sources (GitHub profile + repo languages, LinkedIn profile, free-text recruiter notes).
+  and **unstructured** sources (**PDF/DOCX resumes**, GitHub profile + repo languages,
+  LinkedIn profile, free-text recruiter notes).
 - Detects each source type, extracts a uniform **observation** stream, normalizes
   every value (phones → E.164, dates → `YYYY-MM`, countries → ISO-3166 alpha-2,
   skills → canonical names), then **resolves entities** and **merges** into one record.
@@ -22,6 +23,49 @@ The engine never invents values; an unknown stays `null`.
   select/rename/normalize fields and toggle provenance & confidence — **no code changes**.
 - **Validates** both the canonical record and the projected output before returning it.
 - **Degrades gracefully**: a missing or malformed source is reported and skipped, the run continues.
+
+Beyond the one-shot pipeline, the app also runs as a **persistent candidate database**:
+
+- **Uploads accumulate** — a resume uploaded today merges (via SQLite-stored raw
+  observations) with a CSV row ingested last week, not just within its own batch.
+- **Fuzzy name matching** — spelling drift ("Jordan Rivera" / "Jordn Rivera") merges
+  when a company or city corroborates; conflicting emails/phones always block it, and
+  a name alone still never merges two people.
+- **Manual overrides** — a recruiter can correct any core field in the UI; the value
+  wins with confidence 1.0, is recorded in provenance as `human · manual_override:<who>`,
+  and survives future uploads and re-merges. Overrides can be reset to the merged value.
+- **Auth & organizations** — the database routes require an account (scrypt password
+  hashes, revocable bearer tokens). Registering starts a new **organization**; every
+  candidate, subject, override, view and audit row is scoped to it, so two orgs are
+  fully isolated and never merge — even when they hold the same person. Admins invite
+  teammates with a **role** (admin / recruiter / viewer; viewers are read-only). The
+  stateless playground stays open.
+- **Bias-blind matching** — rank candidates against a JD with identity (name, location,
+  links) hidden behind a stable alias, so screening happens on merit; identity never
+  feeds the score, and reviewers reveal it per-candidate only after assessing fit.
+- **Skill ontology** — a required skill can be covered by a more specific one (React
+  covers a JavaScript requirement) at a discount, with the stand-in surfaced ("via
+  React"). Explainable, deterministic — no embeddings.
+- **Audit log** — every upload, edit, delete, export and match is recorded (who, what,
+  when) and visible to admins, org-scoped.
+- **CSV / XLSX / JSON export** of the (optionally filtered) candidate database, plus
+  **saved views** (named search+skill filter combinations).
+- **Hardened live fetch** — GitHub calls get timeouts, retry with backoff, a TTL cache
+  and request spacing; set `GITHUB_TOKEN` to raise the API rate limit.
+- **PDF hyperlink recovery** — the URLs behind clickable words ("LinkedIn", "GitHub")
+  are read from the PDF's own link annotations, no extra dependency.
+- **Link enrichment** — a discovered GitHub profile link is fetched live (opt-in) and
+  merged as an additional source, corroborating skills and raising confidence.
+  LinkedIn links are recorded but never scraped (no public API).
+- **Incremental merge** — subjects are indexed by identity keys (`subject_keys`), so an
+  upload only re-resolves the candidates it can possibly touch, not the whole database.
+- **JD matching** — paste a job description; candidates are ranked with an explainable
+  score (skills × confidence, years fit, role-word overlap — every component itemized).
+- **Improvement suggestions** — per candidate, what's missing and what fixing it is
+  worth in confidence terms, derived from the actual scoring formula.
+- **OCR** — photographed resumes (PNG/JPG) are read via tesseract.js (first use
+  downloads the English model into `data/ocr-cache`). Scanned image-only PDFs are
+  rejected with a clear message to upload as an image instead.
 
 ---
 
@@ -154,6 +198,63 @@ curl -s localhost:4000/api/transform \
   -d '{"sources":[{"name":"ats.json","content":"{\"candidateName\":\"Jordan Rivera\",\"emailAddress\":\"jordan@example.com\",\"phoneNumber\":\"+14155550132\",\"skillSet\":[\"Python\",\"kubernetes\"]}"}]}'
 ```
 
+### Candidate database API (auth required)
+
+```bash
+# create an account / sign in — both return { token }
+curl -s -X POST localhost:4000/api/auth/register -H 'Content-Type: application/json' \
+  -d '{"email":"me@example.com","password":"atleast8chars"}'
+TOKEN=...   # from the response
+
+# upload source files (pdf, docx, csv, json, txt) — merges into stored candidates
+curl -s -X POST localhost:4000/api/upload -H "Authorization: Bearer $TOKEN" \
+  -F 'files=@samples/recruiter.csv' -F 'files=@some_resume.pdf'
+
+# browse / search / filter
+curl -s "localhost:4000/api/candidates?q=jordan" -H "Authorization: Bearer $TOKEN"
+curl -s "localhost:4000/api/candidates?skill=python" -H "Authorization: Bearer $TOKEN"
+
+# correct a field by hand (allowed: full_name, headline, years_experience, emails, phones, location)
+curl -s -X PATCH localhost:4000/api/candidates/<id> -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' -d '{"field":"headline","value":"Staff Engineer"}'
+
+# undo a manual correction / delete a candidate (and its raw source data)
+curl -s -X DELETE localhost:4000/api/candidates/<id>/overrides/headline -H "Authorization: Bearer $TOKEN"
+curl -s -X DELETE localhost:4000/api/candidates/<id> -H "Authorization: Bearer $TOKEN"
+
+# export the database (same q/skill filters apply): csv, xlsx, or json
+curl -s localhost:4000/api/export.csv  -H "Authorization: Bearer $TOKEN" -o candidates.csv
+curl -s localhost:4000/api/export.xlsx -H "Authorization: Bearer $TOKEN" -o candidates.xlsx
+curl -s localhost:4000/api/export.json -H "Authorization: Bearer $TOKEN" -o candidates.json
+
+# rank candidates against a job description (explainable score per candidate);
+# add "blind":true to redact identity from the results (bias-blind screening)
+curl -s -X POST localhost:4000/api/match -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' -d '{"jd":"Senior Backend Engineer, 4+ years, Python, PostgreSQL, Kubernetes","blind":true}'
+
+# organization: invite a teammate, list members, read the audit log (admin only)
+curl -s -X POST localhost:4000/api/org/members -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' -d '{"email":"teammate@co.com","password":"atleast8chars","role":"recruiter"}'
+curl -s localhost:4000/api/org/members -H "Authorization: Bearer $TOKEN"
+curl -s localhost:4000/api/audit -H "Authorization: Bearer $TOKEN"
+
+# per-candidate improvement suggestions
+curl -s localhost:4000/api/candidates/<id>/suggestions -H "Authorization: Bearer $TOKEN"
+
+# saved views (named filter combinations)
+curl -s -X POST localhost:4000/api/views -H "Authorization: Bearer $TOKEN" \
+  -H 'Content-Type: application/json' -d '{"name":"python devs","skill":"python"}'
+curl -s localhost:4000/api/views -H "Authorization: Bearer $TOKEN"
+curl -s -X DELETE localhost:4000/api/views/<id> -H "Authorization: Bearer $TOKEN"
+
+# upload with GitHub link enrichment (fetches discovered profile links live)
+curl -s -X POST localhost:4000/api/upload -H "Authorization: Bearer $TOKEN" \
+  -F 'files=@resume.pdf' -F 'allowNetwork=true'
+```
+
+The database lives in `data/app.db` (SQLite, created on first run, gitignored).
+Set `DB_PATH` to relocate it.
+
 ### Web UI
 
 ```bash
@@ -282,19 +383,24 @@ of the strongest identity signal, so the same inputs always produce byte-identic
 - "Scale on thousands of candidates": entity resolution is keyed and near-linear in
   practice; this build keeps everything in memory, which is fine at that size.
 
-## Deliberately descoped (time pressure)
+## Deliberately descoped
 
-- Resume PDF/DOCX extraction (the IR is source-agnostic, so adding it is a new
-  extractor, not an engine change; CSV, ATS, GitHub, LinkedIn and free-text notes
-  are all implemented).
-- Fuzzy/ML name matching beyond exact-normalized keys + name/company.
-- Persistence, auth, batching/streaming for very large inputs, and UI polish beyond a
-  clean input/output view.
+- ML-based matching (embeddings, learned rankers) — the fuzzy layer is deterministic
+  Jaro-Winkler with explainable corroboration rules instead.
+- Batching/streaming for very large inputs; the store rebuilds the full merge on each
+  ingest, which is simple, deterministic, and fine for tens of thousands of subjects.
+- Multi-tenancy — every account shares one candidate pool per deployment.
 
 ## Tests
 
-`npm test` runs `test/normalize.test.js` (value normalization + skill canonicalization +
-link classification) and `test/pipeline.test.js` (entity resolution, link-only merge,
-agreement-driven confidence, end-to-end normalization, schema validity for both configs,
-graceful degradation on garbage, empty input, all three `on_missing` modes, and a
-determinism check).
+`npm test` runs four suites (30 tests):
+
+- `test/normalize.test.js` — value normalization, skill canonicalization, link classification.
+- `test/pipeline.test.js` — entity resolution, link-only merge, agreement-driven confidence,
+  end-to-end normalization, schema validity for both configs, graceful degradation on
+  garbage, empty input, all three `on_missing` modes, determinism.
+- `test/resume.test.js` — resume extraction (name/contact/sections), detection, Jaro-Winkler
+  and name similarity, fuzzy merge with corroboration, fuzzy refusal on conflicting emails.
+- `test/store.test.js` — cross-upload dedup against stored subjects, search/filter,
+  override lifecycle (win → survive rebuild → reset), delete without resurrection,
+  auth register/login/logout.

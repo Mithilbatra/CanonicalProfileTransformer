@@ -20,6 +20,14 @@ function detect(source) {
     /"(publicProfileUrl|vanityUrl|profileUrl)"\s*:/.test(content) ||
     isBareLinkedinUrl;
 
+  // resume: by filename, or by plain text carrying resume-style section headings
+  if (/\.(pdf|docx)$/.test(name) || /\b(resume|cv)\b/.test(name.replace(/\.[a-z]+$/, ''))) return 'resume';
+  const looksResume =
+    !content.startsWith('{') && !content.startsWith('[') &&
+    /^(work\s+)?(experience|employment|professional\s+experience)\s*:?$/im.test(content) &&
+    /^education\s*:?$/im.test(content);
+  if (looksResume) return 'resume';
+
   if (name.endsWith('.csv')) return 'csv';
   if (name.endsWith('.txt')) return 'notes';
   if (looksGithubBlob) return 'github';
