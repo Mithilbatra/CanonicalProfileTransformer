@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { Meter, ConfTag, Provenance, provIndex, confColor, EMPTY, hasText, FieldRow } from './bits';
+import { Meter, ConfTag, Provenance, provIndex, confColor, EMPTY, hasText, FieldRow, CountUp } from './bits';
 
 // The stateless demo: run the sample sources through the pipeline and watch
 // the merge happen. Nothing here is stored.
@@ -33,7 +33,7 @@ function CanonicalCard({ profile }) {
         {overall != null && (
           <div className="overall">
             <div className="ov-label">overall confidence</div>
-            <div className="ov-num" style={{ color: confColor(overall) }}>{overall.toFixed(2)}</div>
+            <div className="ov-num" style={{ color: confColor(overall) }}><CountUp value={overall} /></div>
             <Meter value={overall} />
           </div>
         )}

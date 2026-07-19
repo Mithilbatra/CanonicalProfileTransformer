@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, downloadFile } from './api';
-import { Meter, ConfTag, Provenance, provIndex, confColor, EMPTY, hasText } from './bits';
+import { Meter, ConfTag, Provenance, provIndex, confColor, EMPTY, hasText, CountUp } from './bits';
 
 // The persistent candidate database: upload source files (optionally
 // enriching from discovered GitHub links), browse/search the resolved
@@ -354,7 +354,7 @@ function Detail({ id, matchResult, blind, onChanged, onDeleted }) {
         <div className="overall">
           <div className="ov-label">overall confidence</div>
           <div className="ov-num" style={{ color: confColor(r.overall_confidence) }}>
-            {r.overall_confidence.toFixed(2)}
+            <CountUp value={r.overall_confidence} />
           </div>
           <Meter value={r.overall_confidence} />
         </div>
@@ -582,7 +582,7 @@ function AtsPanel({ score, suggestions, record, open, onToggle, onSave }) {
     <div className="sugg">
       <button className="linklike" onClick={onToggle}>
         <span className="ats-head">
-          ATS readiness: <b style={{ color: confColor(score) }}>{Math.round(score * 100)}/100 · {band.label}</b>
+          ATS readiness: <b style={{ color: confColor(score) }}><CountUp value={score * 100} decimals={0} />/100 · {band.label}</b>
           {suggestions.length > 0 && <span className="ats-count"> — {suggestions.length} suggestion{suggestions.length === 1 ? '' : 's'}{fixable ? `, ${fixable} fixable here` : ''}</span>}
         </span>
       </button>

@@ -1,5 +1,29 @@
 // Small display components shared by the playground and the database views.
 
+import { useEffect, useState } from 'react';
+
+// Animates a number from 0 to its value on mount — purely visual sugar for
+// score displays. Skips straight to the value when reduced motion is set.
+export function CountUp({ value, decimals = 2, duration = 700 }) {
+  const [shown, setShown] = useState(0);
+  useEffect(() => {
+    if (window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) {
+      setShown(value);
+      return undefined;
+    }
+    let raf;
+    const t0 = performance.now();
+    const tick = (t) => {
+      const p = Math.min(1, (t - t0) / duration);
+      setShown(value * (1 - Math.pow(1 - p, 3))); // ease-out cubic
+      if (p < 1) raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [value, duration]);
+  return <>{shown.toFixed(decimals)}</>;
+}
+
 export function confColor(c) {
   if (c == null) return 'var(--c-null)';
   if (c >= 0.75) return 'var(--c-high)';
