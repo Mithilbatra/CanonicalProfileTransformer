@@ -1,0 +1,17 @@
+# One-command local deploy:  docker compose up --build
+# The candidate database persists in the named volume `cpt-data`.
+services:
+  app:
+    build: .
+    ports:
+      - "4000:4000"
+    environment:
+      - PORT=4000
+      - DB_PATH=/app/data/app.db
+      # - GITHUB_TOKEN=...   # optional: raises the GitHub enrichment rate limit
+    volumes:
+      - cpt-data:/app/data
+    restart: unless-stopped
+
+volumes:
+  cpt-data:

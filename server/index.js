@@ -10,12 +10,16 @@ const { runPipeline, extractSources, DEFAULT_CONFIG } = require('./engine/pipeli
 const { bufferToText } = require('./lib/filetext');
 const { matchCandidates } = require('./engine/match');
 const { suggestImprovements } = require('./engine/suggest');
+const { insights } = require('./analytics');
+const { rateLimit } = require('./lib/ratelimit');
 const auth = require('./auth');
 const store = require('./store');
 const audit = require('./audit');
 
 // roles allowed to mutate candidate data (viewers are read-only)
 const canWrite = auth.requireRole('admin', 'recruiter');
+// throttle credential endpoints against stuffing / signup spam
+const authLimiter = rateLimit({ windowMs: 60_000, max: 20 });
 
 const ROOT = path.join(__dirname, '..');
 const SAMPLES = path.join(ROOT, 'samples');
@@ -37,7 +41,7 @@ function readIf(p) {
 
 // ---- auth ------------------------------------------------------------
 
-app.post('/api/auth/register', (req, res) => {
+app.post('/api/auth/register', authLimiter, (req, res) => {
   try {
     const { email, password, orgName } = req.body || {};
     const session = auth.register(email, password, orgName);
@@ -48,7 +52,7 @@ app.post('/api/auth/register', (req, res) => {
   }
 });
 
-app.post('/api/auth/login', (req, res) => {
+app.post('/api/auth/login', authLimiter, (req, res) => {
   try {
     const { email, password } = req.body || {};
     res.json(auth.login(email, password));
@@ -151,14 +155,62 @@ app.post('/api/upload', auth.requireAuth, canWrite, upload.array('files'), async
 });
 
 app.get('/api/candidates', auth.requireAuth, (req, res) => {
-  const { q, skill } = req.query;
-  res.json({ candidates: store.listCandidates(req.user.org_id, { q, skill }) });
+  const { q, skill, stage, tag } = req.query;
+  res.json({ candidates: store.listCandidates(req.user.org_id, { q, skill, stage, tag }), stages: store.STAGES });
+});
+
+// Bulk actions across a set of candidate ids. Declared before the :id routes.
+app.post('/api/candidates/bulk/stage', auth.requireAuth, canWrite, (req, res) => {
+  try {
+    const { ids, stage } = req.body || {};
+    if (!Array.isArray(ids)) return res.status(400).json({ error: 'body.ids must be an array' });
+    const updated = store.setStageBulk(req.user.org_id, ids, stage, req.user.email);
+    audit.record(req.user.org_id, req.user.email, 'candidates.bulk_stage', null, { stage, count: updated });
+    res.json({ updated });
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+app.post('/api/candidates/bulk/delete', auth.requireAuth, canWrite, (req, res) => {
+  const { ids } = req.body || {};
+  if (!Array.isArray(ids)) return res.status(400).json({ error: 'body.ids must be an array' });
+  const deleted = store.deleteCandidates(req.user.org_id, ids);
+  audit.record(req.user.org_id, req.user.email, 'candidates.bulk_delete', null, { count: deleted });
+  res.json({ deleted });
 });
 
 app.get('/api/candidates/:id', auth.requireAuth, (req, res) => {
   const candidate = store.getCandidate(req.user.org_id, req.params.id);
   if (!candidate) return res.status(404).json({ error: 'candidate not found' });
   res.json(candidate);
+});
+
+// Workflow metadata: pipeline stage, tags, private note (one endpoint each).
+app.put('/api/candidates/:id/stage', auth.requireAuth, canWrite, (req, res) => {
+  try {
+    const updated = store.setStage(req.user.org_id, req.params.id, (req.body || {}).stage, req.user.email);
+    audit.record(req.user.org_id, req.user.email, 'candidate.stage', req.params.id, { stage: (req.body || {}).stage });
+    res.json(updated);
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+app.put('/api/candidates/:id/tags', auth.requireAuth, canWrite, (req, res) => {
+  try {
+    res.json(store.setTags(req.user.org_id, req.params.id, (req.body || {}).tags, req.user.email));
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+app.put('/api/candidates/:id/note', auth.requireAuth, canWrite, (req, res) => {
+  try {
+    res.json(store.setNote(req.user.org_id, req.params.id, (req.body || {}).note, req.user.email));
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
 });
 
 // Manual correction of a field. Recorded with provenance source "human"
@@ -212,6 +264,30 @@ app.get('/api/candidates/:id/suggestions', auth.requireAuth, (req, res) => {
   const candidate = store.getCandidate(req.user.org_id, req.params.id);
   if (!candidate) return res.status(404).json({ error: 'candidate not found' });
   res.json({ suggestions: suggestImprovements(candidate.record, candidate.field_confidence) });
+});
+
+// Screening analytics: funnel, confidence distribution, skill supply, sources.
+app.get('/api/insights', auth.requireAuth, (req, res) => {
+  res.json(insights(req.user.org_id));
+});
+
+// Saved JD templates (reusable job-description text).
+app.get('/api/jd-templates', auth.requireAuth, (req, res) => res.json({ templates: store.listJdTemplates(req.user.org_id) }));
+app.post('/api/jd-templates', auth.requireAuth, canWrite, (req, res) => {
+  try {
+    const { name, jd } = req.body || {};
+    res.json(store.saveJdTemplate(req.user.org_id, name, jd, req.user.email));
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+app.delete('/api/jd-templates/:id', auth.requireAuth, canWrite, (req, res) => {
+  try {
+    store.deleteJdTemplate(req.user.org_id, req.params.id);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
 });
 
 // Saved views: named q/skill filter combinations.

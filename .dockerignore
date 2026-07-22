@@ -1,0 +1,12 @@
+node_modules
+web/node_modules
+web/dist
+data
+*.log
+.git
+.github
+test
+samples2
+output
+out.json
+**/*.md

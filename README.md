@@ -48,8 +48,22 @@ Beyond the one-shot pipeline, the app also runs as a **persistent candidate data
   React"). Explainable, deterministic — no embeddings.
 - **Audit log** — every upload, edit, delete, export and match is recorded (who, what,
   when) and visible to admins, org-scoped.
-- **CSV / XLSX / JSON export** of the (optionally filtered) candidate database, plus
-  **saved views** (named search+skill filter combinations).
+- **Hiring pipeline** — each candidate carries a stage (new → screening → interview →
+  offer → hired/rejected), free-text **tags**, and a private **note**; all survive
+  re-merges. Filter the list by stage, and **bulk-move or bulk-delete** a selection.
+- **Weighted JD matching** — the matcher separates *required* from *nice-to-have* skills
+  (read from the JD's "nice to have / preferred" section) and weighs them accordingly;
+  when years aren't stated it **estimates tenure** from the work history (overlaps
+  merged). **Saved JD templates** make reruns one click.
+- **Insights dashboard** — funnel by stage, confidence distribution, most-common skills,
+  and where the data came from — a plain read-out of the pool (no protected attributes).
+- **Dark mode** — a light "daylight studio" and a dark "midnight studio" theme; the
+  toggle in the header persists, and first-time visitors follow their OS preference.
+- **CSV / XLSX / JSON export** of the (optionally stage/skill-filtered) candidate
+  database, plus **saved views** (named filter combinations).
+- **Rate-limited auth, Docker & CI** — login/register are throttled per IP; a
+  multi-stage `Dockerfile` + `docker-compose.yml` build and run the whole app
+  (`docker compose up --build`), and GitHub Actions runs the test suite on every push.
 - **Hardened live fetch** — GitHub calls get timeouts, retry with backoff, a TTL cache
   and request spacing; set `GITHUB_TOKEN` to raise the API rate limit.
 - **PDF hyperlink recovery** — the URLs behind clickable words ("LinkedIn", "GitHub")

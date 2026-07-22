@@ -1,14 +1,23 @@
 import { useEffect, useState } from 'react';
 import Playground from './Playground';
 import Candidates from './Candidates';
+import Insights from './Insights';
 import Admin from './Admin';
 import Login from './Login';
 import { api, getSession, clearSession } from './api';
 
+// First visit follows the OS colour scheme; after that we honour the choice
+// the user actually made.
+function initialTheme() {
+  const saved = localStorage.getItem('cpt_theme');
+  if (saved) return saved;
+  return window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+}
+
 export default function App() {
   const [view, setView] = useState('playground');
   const [session, setSession] = useState(getSession());
-  const [theme, setTheme] = useState(() => localStorage.getItem('cpt_theme') || 'light');
+  const [theme, setTheme] = useState(initialTheme);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -38,6 +47,7 @@ export default function App() {
                 <div className="seg" role="group" aria-label="view">
                   <button aria-pressed={view === 'playground'} onClick={() => setView('playground')}>playground</button>
                   <button aria-pressed={view === 'database'} onClick={() => setView('database')}>candidate database</button>
+                  {session && <button aria-pressed={view === 'insights'} onClick={() => setView('insights')}>insights</button>}
                   {isAdmin && <button aria-pressed={view === 'admin'} onClick={() => setView('admin')}>admin</button>}
                 </div>
                 <button
@@ -61,7 +71,9 @@ export default function App() {
             {view === 'playground' &&
               'Feed conflicting recruiter, ATS, GitHub and free-text records for the same people. The engine resolves who is who, normalizes every value, and returns one canonical profile per candidate — each field carrying where it came from and how confident the merge is. Nothing is invented; a true unknown stays empty.'}
             {view === 'database' &&
-              'Upload resumes, CSVs and ATS exports over time. New sources merge into the candidates already on file, fields can be corrected by hand, matched against a job description (optionally bias-blind), and exported.'}
+              'Upload resumes, CSVs and ATS exports over time. New sources merge into the candidates already on file, move them through your hiring pipeline, tag and annotate them, match against a job description (optionally bias-blind), and export.'}
+            {view === 'insights' &&
+              'A read-out of your candidate pool: the hiring funnel, how confident the merges are, which skills are abundant, and where the data came from.'}
             {view === 'admin' &&
               'Your organization: teammates and their roles, and the audit trail of every action taken on candidate data.'}
           </p>
@@ -70,6 +82,9 @@ export default function App() {
         {view === 'playground' && <Playground />}
         {view === 'database' && (session
           ? <Candidates />
+          : <Login onLogin={setSession} />)}
+        {view === 'insights' && (session
+          ? <Insights />
           : <Login onLogin={setSession} />)}
         {view === 'admin' && isAdmin && <Admin />}
       </div>

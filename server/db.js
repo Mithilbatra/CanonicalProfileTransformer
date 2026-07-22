@@ -125,6 +125,31 @@ db.exec(`
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
   CREATE INDEX IF NOT EXISTS idx_audit_org ON audit(org_id, id DESC);
+
+  -- Workflow metadata layered on a candidate: hiring pipeline stage, free
+  -- tags, and a private note. Keyed by candidate_id (stable hash), so it
+  -- survives re-merges the same way overrides do.
+  CREATE TABLE IF NOT EXISTS candidate_meta (
+    org_id       INTEGER NOT NULL,
+    candidate_id TEXT NOT NULL,
+    stage        TEXT NOT NULL DEFAULT 'new',   -- new|screening|interview|offer|hired|rejected
+    tags         TEXT NOT NULL DEFAULT '[]',    -- JSON array of strings
+    note         TEXT,
+    updated_by   TEXT,
+    updated_at   TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (org_id, candidate_id)
+  );
+
+  -- Saved job-description templates (reusable JD text), like saved views.
+  CREATE TABLE IF NOT EXISTS jd_templates (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    org_id     INTEGER NOT NULL,
+    name       TEXT NOT NULL,
+    jd         TEXT NOT NULL,
+    created_by TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE (org_id, name)
+  );
 `);
 
 if (isLegacy) migrateLegacy();

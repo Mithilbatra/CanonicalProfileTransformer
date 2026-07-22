@@ -29,77 +29,138 @@ const ROLE_WORDS = [
   'principal', 'frontend', 'backend', 'fullstack', 'full-stack', 'devops', 'data',
 ];
 
+// Weight of a "nice to have" skill relative to a required one in the score.
+const NICE_WEIGHT = 0.4;
+// Skills mentioned at or after one of these markers are treated as preferred
+// rather than required, so missing them costs far less.
+const PREFERRED_MARKER = /nice[-\s]to[-\s]haves?|preferred|bonus|good[-\s]to[-\s]have|desirable|a plus|pluses/i;
+
 function extractRequirements(jdText) {
   const text = String(jdText || '');
   const lower = text.toLowerCase();
+  const markerMatch = lower.match(PREFERRED_MARKER);
+  const markerAt = markerMatch ? markerMatch.index : Infinity;
 
-  const skills = [];
+  const required = [];
+  const niceToHave = [];
   for (const [canon, aliases] of Object.entries(CANON)) {
+    let firstAt = Infinity;
     for (const alias of [canon.toLowerCase(), ...aliases]) {
       const re = new RegExp(`(?:^|[^a-z0-9+#.])${escapeRe(alias)}(?:$|[^a-z0-9+#.]|\\.(?=\\s|$))`, 'i');
-      if (re.test(lower)) {
-        skills.push(canon);
-        break;
-      }
+      const m = lower.match(re);
+      if (m) { firstAt = Math.min(firstAt, m.index); }
     }
+    if (firstAt === Infinity) continue;
+    (firstAt >= markerAt ? niceToHave : required).push(canon);
   }
 
   const yearsMatch = lower.match(/(\d{1,2})\s*\+?\s*years?/);
   const minYears = yearsMatch ? parseInt(yearsMatch[1], 10) : null;
-
   const titleWords = ROLE_WORDS.filter((w) => new RegExp(`\\b${w}\\b`, 'i').test(lower));
 
-  return { skills: skills.sort(), minYears, titleWords };
+  // `skills` stays as the full requested set (kept for callers/audit); the
+  // required/niceToHave split is what the score actually weighs.
+  return {
+    skills: [...required, ...niceToHave].sort(),
+    required: required.sort(),
+    niceToHave: niceToHave.sort(),
+    minYears,
+    titleWords,
+  };
+}
+
+// Total years actually spent employed, merged across overlapping roles, used
+// as an honest fallback when years_experience wasn't stated on the resume.
+function estimateTenureYears(experience = []) {
+  const now = new Date();
+  const nowM = now.getFullYear() * 12 + now.getMonth() + 1;
+  const intervals = [];
+  for (const e of experience) {
+    const s = toMonths(e.start);
+    if (s == null) continue;
+    const end = toMonths(e.end) ?? nowM;
+    if (end >= s) intervals.push([s, Math.min(end, nowM)]);
+  }
+  if (!intervals.length) return null;
+  intervals.sort((a, b) => a[0] - b[0]);
+  let months = 0;
+  let [curS, curE] = intervals[0];
+  for (const [s, e] of intervals.slice(1)) {
+    if (s <= curE) curE = Math.max(curE, e);
+    else { months += curE - curS; curS = s; curE = e; }
+  }
+  months += curE - curS;
+  return Math.max(0, Math.round(months / 12));
+}
+
+function toMonths(ym) {
+  const m = /^(\d{4})-(\d{2})$/.exec(String(ym || ''));
+  return m ? parseInt(m[1], 10) * 12 + parseInt(m[2], 10) : null;
 }
 
 function scoreCandidate(record, requirements) {
   const parts = [];
 
+  // support both the new required/niceToHave split and a bare skills list
+  const required = requirements.required || requirements.skills || [];
+  const niceToHave = requirements.niceToHave || [];
+
   const bySkill = new Map(record.skills.map((s) => [s.name, s]));
   const skillNames = record.skills.map((s) => s.name);
   const matched = [];
-  const missing = [];
+  const missing = [];        // names only (strings), required-first
+  const missingRequired = []; // subset that were required
 
-  for (const req of requirements.skills) {
+  const assess = (req, isRequired) => {
     const cov = coverage(req, skillNames);
     if (!cov) {
       missing.push(req);
-      continue;
+      if (isRequired) missingRequired.push(req);
+      return { weight: isRequired ? 1 : NICE_WEIGHT, confidence: 0 };
     }
     const src = bySkill.get(cov.via);
     const confidence = round((src ? src.confidence : 0) * (cov.direct ? 1 : IMPLIED_DISCOUNT));
-    matched.push({
-      name: req,
-      via: cov.direct ? null : cov.via, // the skill that stood in for the requirement
-      confidence,
-      sources: src ? src.sources : [],
-    });
-  }
+    matched.push({ name: req, required: isRequired, via: cov.direct ? null : cov.via, confidence, sources: src ? src.sources : [] });
+    return { weight: isRequired ? 1 : NICE_WEIGHT, confidence };
+  };
 
-  if (requirements.skills.length) {
-    const skillScore = matched.reduce((sum, m) => sum + m.confidence, 0) / requirements.skills.length;
+  const contribs = [
+    ...required.map((r) => assess(r, true)),
+    ...niceToHave.map((r) => assess(r, false)),
+  ];
+
+  if (contribs.length) {
+    const wSum = contribs.reduce((s, c) => s + c.weight, 0);
+    const skillScore = wSum ? contribs.reduce((s, c) => s + c.weight * c.confidence, 0) / wSum : 0;
     const viaCount = matched.filter((m) => m.via).length;
+    const reqCovered = matched.filter((m) => m.required).length;
     parts.push({
       component: 'skills',
       weight: 0.7,
       score: round(skillScore),
       detail:
-        `${matched.length}/${requirements.skills.length} required skills covered, weighted by confidence` +
+        `${reqCovered}/${required.length} required` +
+        (niceToHave.length ? ` + ${matched.filter((m) => !m.required).length}/${niceToHave.length} preferred` : '') +
+        ` skills covered` +
         (viaCount ? ` (${viaCount} via a related skill)` : ''),
     });
   }
 
   if (requirements.minYears != null) {
-    const years = record.years_experience;
+    const stated = record.years_experience;
+    const estimated = stated == null ? estimateTenureYears(record.experience) : null;
+    const years = stated != null ? stated : estimated;
     const yearsScore = years == null ? 0 : Math.min(1, years / requirements.minYears);
     parts.push({
       component: 'years',
       weight: 0.15,
       score: round(yearsScore),
       detail:
-        years == null
-          ? `JD asks ${requirements.minYears}+ years; candidate's years unknown (scored 0 — honestly-empty, not guessed)`
-          : `JD asks ${requirements.minYears}+ years; candidate has ${years}`,
+        stated != null
+          ? `JD asks ${requirements.minYears}+ years; candidate has ${stated}`
+          : estimated != null
+            ? `JD asks ${requirements.minYears}+ years; ~${estimated} estimated from work history`
+            : `JD asks ${requirements.minYears}+ years; candidate's years unknown (scored 0 — honestly-empty, not guessed)`,
     });
   }
 
@@ -119,7 +180,7 @@ function scoreCandidate(record, requirements) {
   const totalWeight = parts.reduce((s, p) => s + p.weight, 0);
   const score = totalWeight ? round(parts.reduce((s, p) => s + p.weight * p.score, 0) / totalWeight) : 0;
 
-  return { score, matched, missing, parts };
+  return { score, matched, missing, missingRequired, parts };
 }
 
 // Stable, non-identifying label for blind review, derived from the id.
@@ -163,4 +224,4 @@ function round(x) {
   return Math.round(x * 100) / 100;
 }
 
-module.exports = { matchCandidates, extractRequirements, scoreCandidate, aliasFor };
+module.exports = { matchCandidates, extractRequirements, scoreCandidate, aliasFor, estimateTenureYears };
