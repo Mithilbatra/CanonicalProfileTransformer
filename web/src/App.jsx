@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import Playground from './Playground';
 import Candidates from './Candidates';
 import Admin from './Admin';
@@ -8,6 +8,12 @@ import { api, getSession, clearSession } from './api';
 export default function App() {
   const [view, setView] = useState('playground');
   const [session, setSession] = useState(getSession());
+  const [theme, setTheme] = useState(() => localStorage.getItem('cpt_theme') || 'light');
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    localStorage.setItem('cpt_theme', theme);
+  }, [theme]);
 
   async function signOut() {
     try { await api('/api/auth/logout', { method: 'POST' }); } catch { /* token may already be dead */ }
@@ -28,10 +34,20 @@ export default function App() {
               <h1>Many messy sources in. One profile you can <em>trust</em> out.</h1>
             </div>
             <nav className="topnav">
-              <div className="seg" role="group" aria-label="view">
-                <button aria-pressed={view === 'playground'} onClick={() => setView('playground')}>playground</button>
-                <button aria-pressed={view === 'database'} onClick={() => setView('database')}>candidate database</button>
-                {isAdmin && <button aria-pressed={view === 'admin'} onClick={() => setView('admin')}>admin</button>}
+              <div className="nav-row">
+                <div className="seg" role="group" aria-label="view">
+                  <button aria-pressed={view === 'playground'} onClick={() => setView('playground')}>playground</button>
+                  <button aria-pressed={view === 'database'} onClick={() => setView('database')}>candidate database</button>
+                  {isAdmin && <button aria-pressed={view === 'admin'} onClick={() => setView('admin')}>admin</button>}
+                </div>
+                <button
+                  className="theme-btn"
+                  onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')}
+                  aria-label={theme === 'light' ? 'switch to dark mode' : 'switch to light mode'}
+                  title={theme === 'light' ? 'lights off' : 'lights on'}
+                >
+                  <span key={theme}>{theme === 'light' ? '☾' : '☀'}</span>
+                </button>
               </div>
               {session && (
                 <span className="whoami">
