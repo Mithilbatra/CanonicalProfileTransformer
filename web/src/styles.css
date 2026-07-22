@@ -2267,3 +2267,38 @@ html[data-theme="dark"] .raw {
 @media (max-width: 520px) {
   .stat-row { grid-template-columns: 1fr; }
 }
+
+/* ---------- error boundary ---------- */
+
+.crash {
+  max-width: 560px;
+  margin: 48px auto;
+  background: var(--paper);
+  border: 2px solid var(--line);
+  border-radius: var(--r);
+  box-shadow: var(--pop-lg);
+  padding: 28px;
+  text-align: center;
+}
+
+.crash h2 { margin: 0 0 10px; font-size: 20px; color: var(--line); }
+.crash p { color: var(--text-inv-lo); font-size: 14px; margin: 0 0 16px; }
+.crash kbd {
+  font-family: var(--mono);
+  font-size: 11px;
+  background: var(--ink-3);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 1px 6px;
+}
+.crash-detail {
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--c-low);
+  background: rgba(224, 82, 82, 0.08);
+  border-radius: var(--r-sm);
+  padding: 10px 12px;
+  margin: 0 0 18px;
+  overflow-x: auto;
+  text-align: left;
+}

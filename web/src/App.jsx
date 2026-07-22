@@ -4,6 +4,7 @@ import Candidates from './Candidates';
 import Insights from './Insights';
 import Admin from './Admin';
 import Login from './Login';
+import ErrorBoundary from './ErrorBoundary';
 import { api, getSession, clearSession } from './api';
 
 // First visit follows the OS colour scheme; after that we honour the choice
@@ -79,14 +80,16 @@ export default function App() {
           </p>
         </header>
 
-        {view === 'playground' && <Playground />}
-        {view === 'database' && (session
-          ? <Candidates />
-          : <Login onLogin={setSession} />)}
-        {view === 'insights' && (session
-          ? <Insights />
-          : <Login onLogin={setSession} />)}
-        {view === 'admin' && isAdmin && <Admin />}
+        <ErrorBoundary resetKey={view}>
+          {view === 'playground' && <Playground />}
+          {view === 'database' && (session
+            ? <Candidates />
+            : <Login onLogin={setSession} />)}
+          {view === 'insights' && (session
+            ? <Insights />
+            : <Login onLogin={setSession} />)}
+          {view === 'admin' && isAdmin && <Admin />}
+        </ErrorBoundary>
       </div>
 
       <footer>
