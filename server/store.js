@@ -321,8 +321,94 @@ function deleteCandidate(orgId, candidateId) {
     }
     db.prepare('DELETE FROM overrides WHERE org_id = ? AND candidate_id = ?').run(orgId, candidateId);
     db.prepare('DELETE FROM candidate_meta WHERE org_id = ? AND candidate_id = ?').run(orgId, candidateId);
+    db.prepare('DELETE FROM job_candidates WHERE org_id = ? AND candidate_id = ?').run(orgId, candidateId);
     db.prepare('DELETE FROM candidates WHERE org_id = ? AND candidate_id = ?').run(orgId, candidateId);
   })();
+}
+
+// ---- job requisitions -------------------------------------------------
+
+function listJobs(orgId) {
+  return db
+    .prepare(
+      `SELECT j.id, j.title, j.description, j.status, j.created_by, j.created_at,
+              (SELECT COUNT(*) FROM job_candidates jc WHERE jc.job_id = j.id) AS candidate_count
+       FROM jobs j WHERE j.org_id = ? ORDER BY j.status, j.created_at DESC`
+    )
+    .all(orgId);
+}
+
+function getJob(orgId, jobId) {
+  const job = db.prepare('SELECT id, title, description, status, created_by, created_at FROM jobs WHERE org_id = ? AND id = ?').get(orgId, jobId);
+  return job || null;
+}
+
+function createJob(orgId, { title, description, status } = {}, createdBy) {
+  title = String(title || '').trim();
+  if (!title || title.length > 140) throw httpError(400, 'job title must be 1-140 characters');
+  const st = status === 'closed' ? 'closed' : 'open';
+  const id = db
+    .prepare('INSERT INTO jobs (org_id, title, description, status, created_by) VALUES (?, ?, ?, ?, ?)')
+    .run(orgId, title, description ? String(description).slice(0, 20000) : null, st, createdBy || null).lastInsertRowid;
+  return getJob(orgId, id);
+}
+
+function updateJob(orgId, jobId, patch = {}) {
+  const job = getJob(orgId, jobId);
+  if (!job) throw httpError(404, 'job not found');
+  const title = patch.title != null ? String(patch.title).trim() : job.title;
+  if (!title || title.length > 140) throw httpError(400, 'job title must be 1-140 characters');
+  const description = patch.description !== undefined ? (patch.description ? String(patch.description).slice(0, 20000) : null) : job.description;
+  const status = patch.status != null ? (patch.status === 'closed' ? 'closed' : 'open') : job.status;
+  db.prepare('UPDATE jobs SET title = ?, description = ?, status = ? WHERE org_id = ? AND id = ?').run(title, description, status, orgId, jobId);
+  return getJob(orgId, jobId);
+}
+
+function deleteJob(orgId, jobId) {
+  const job = getJob(orgId, jobId);
+  if (!job) throw httpError(404, 'job not found');
+  db.transaction(() => {
+    db.prepare('DELETE FROM job_candidates WHERE org_id = ? AND job_id = ?').run(orgId, jobId);
+    db.prepare('DELETE FROM jobs WHERE org_id = ? AND id = ?').run(orgId, jobId);
+  })();
+}
+
+// Attach candidates to a job (skips ones already attached or not in the org).
+function addCandidatesToJob(orgId, jobId, candidateIds) {
+  if (!getJob(orgId, jobId)) throw httpError(404, 'job not found');
+  const insert = db.prepare('INSERT OR IGNORE INTO job_candidates (org_id, job_id, candidate_id, stage) VALUES (?, ?, ?, ?)');
+  const exists = db.prepare('SELECT 1 FROM candidates WHERE org_id = ? AND candidate_id = ?');
+  let added = 0;
+  db.transaction(() => {
+    for (const cid of candidateIds || []) {
+      if (exists.get(orgId, cid)) added += insert.run(orgId, jobId, cid, 'new').changes;
+    }
+  })();
+  return added;
+}
+
+function removeCandidateFromJob(orgId, jobId, candidateId) {
+  const info = db.prepare('DELETE FROM job_candidates WHERE org_id = ? AND job_id = ? AND candidate_id = ?').run(orgId, jobId, candidateId);
+  if (!info.changes) throw httpError(404, 'candidate is not on this job');
+}
+
+function setJobStage(orgId, jobId, candidateId, stage) {
+  if (!STAGES.includes(stage)) throw httpError(400, `stage must be one of: ${STAGES.join(', ')}`);
+  const info = db.prepare('UPDATE job_candidates SET stage = ? WHERE org_id = ? AND job_id = ? AND candidate_id = ?').run(stage, orgId, jobId, candidateId);
+  if (!info.changes) throw httpError(404, 'candidate is not on this job');
+}
+
+// The candidates attached to a job, each with its per-job stage.
+function listJobCandidates(orgId, jobId) {
+  if (!getJob(orgId, jobId)) throw httpError(404, 'job not found');
+  const rows = db
+    .prepare(
+      `SELECT jc.candidate_id, jc.stage AS job_stage, c.record
+       FROM job_candidates jc JOIN candidates c ON c.org_id = jc.org_id AND c.candidate_id = jc.candidate_id
+       WHERE jc.org_id = ? AND jc.job_id = ? ORDER BY jc.added_at`
+    )
+    .all(orgId, jobId);
+  return rows.map((r) => ({ candidate_id: r.candidate_id, job_stage: r.job_stage, record: JSON.parse(r.record) }));
 }
 
 // ---- saved views (named q/skill filter combinations) -------------------
@@ -465,6 +551,15 @@ module.exports = {
   deleteJdTemplate,
   exportOrg,
   importOrg,
+  listJobs,
+  getJob,
+  createJob,
+  updateJob,
+  deleteJob,
+  addCandidatesToJob,
+  removeCandidateFromJob,
+  setJobStage,
+  listJobCandidates,
   OVERRIDABLE,
   STAGES,
 };

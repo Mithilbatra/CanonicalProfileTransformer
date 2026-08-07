@@ -171,6 +171,31 @@ db.exec(`
     expires_at  TEXT NOT NULL,
     created_at  TEXT NOT NULL DEFAULT (datetime('now'))
   );
+
+  -- Job requisitions: a role being hired for, with its own JD.
+  CREATE TABLE IF NOT EXISTS jobs (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    org_id      INTEGER NOT NULL,
+    title       TEXT NOT NULL,
+    description TEXT,                          -- the job description text
+    status      TEXT NOT NULL DEFAULT 'open',  -- open | closed
+    created_by  TEXT,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_jobs_org ON jobs(org_id);
+
+  -- Candidates attached to a job, each with a PER-JOB pipeline stage: the same
+  -- person can be at "interview" for one job and "rejected" for another.
+  CREATE TABLE IF NOT EXISTS job_candidates (
+    org_id       INTEGER NOT NULL,
+    job_id       INTEGER NOT NULL,
+    candidate_id TEXT NOT NULL,
+    stage        TEXT NOT NULL DEFAULT 'new',
+    added_at     TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (job_id, candidate_id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_job_candidates_job ON job_candidates(org_id, job_id);
+  CREATE INDEX IF NOT EXISTS idx_job_candidates_cid ON job_candidates(org_id, candidate_id);
 `);
 
 if (isLegacy) migrateLegacy();

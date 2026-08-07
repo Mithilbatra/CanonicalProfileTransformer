@@ -51,6 +51,10 @@ Beyond the one-shot pipeline, the app also runs as a **persistent candidate data
 - **Hiring pipeline** — each candidate carries a stage (new → screening → interview →
   offer → hired/rejected), free-text **tags**, and a private **note**; all survive
   re-merges. Filter the list by stage, and **bulk-move or bulk-delete** a selection.
+- **Job requisitions** — open a **Job** for each role with its own JD, **match the whole
+  candidate pool against it** (optionally bias-blind) and add the best fits, then run a
+  **kanban pipeline scoped to that job**: the same person can sit at "interview" on one
+  job and "rejected" on another, independent of their global candidate-database stage.
 - **Weighted JD matching** — the matcher separates *required* from *nice-to-have* skills
   (read from the JD's "nice to have / preferred" section) and weighs them accordingly;
   when years aren't stated it **estimates tenure** from the work history (overlaps

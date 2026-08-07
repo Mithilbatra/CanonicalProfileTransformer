@@ -389,6 +389,72 @@ app.delete('/api/jd-templates/:id', auth.requireAuth, canWrite, (req, res) => {
   }
 });
 
+// ---- job requisitions -------------------------------------------------
+
+const jobHandler = (fn) => (req, res) => {
+  try { res.json(fn(req)); } catch (err) { res.status(err.status || 500).json({ error: err.message }); }
+};
+
+app.get('/api/jobs', auth.requireAuth, jobHandler((req) => ({ jobs: store.listJobs(req.user.org_id), stages: store.STAGES })));
+
+app.post('/api/jobs', auth.requireAuth, canWrite, jobHandler((req) => {
+  const job = store.createJob(req.user.org_id, req.body || {}, req.user.email);
+  audit.record(req.user.org_id, req.user.email, 'job.create', String(job.id), { title: job.title });
+  return job;
+}));
+
+app.get('/api/jobs/:id', auth.requireAuth, (req, res) => {
+  const job = store.getJob(req.user.org_id, req.params.id);
+  if (!job) return res.status(404).json({ error: 'job not found' });
+  res.json(job);
+});
+
+app.patch('/api/jobs/:id', auth.requireAuth, canWrite, jobHandler((req) => {
+  const job = store.updateJob(req.user.org_id, req.params.id, req.body || {});
+  audit.record(req.user.org_id, req.user.email, 'job.update', String(job.id), { status: job.status });
+  return job;
+}));
+
+app.delete('/api/jobs/:id', auth.requireAuth, canWrite, jobHandler((req) => {
+  store.deleteJob(req.user.org_id, req.params.id);
+  audit.record(req.user.org_id, req.user.email, 'job.delete', String(req.params.id));
+  return { ok: true };
+}));
+
+app.get('/api/jobs/:id/candidates', auth.requireAuth, jobHandler((req) => ({
+  candidates: store.listJobCandidates(req.user.org_id, req.params.id),
+  stages: store.STAGES,
+})));
+
+app.post('/api/jobs/:id/candidates', auth.requireAuth, canWrite, jobHandler((req) => {
+  const { ids } = req.body || {};
+  if (!Array.isArray(ids)) throw Object.assign(new Error('body.ids must be an array'), { status: 400 });
+  const added = store.addCandidatesToJob(req.user.org_id, req.params.id, ids);
+  audit.record(req.user.org_id, req.user.email, 'job.add_candidates', String(req.params.id), { added });
+  return { added };
+}));
+
+app.delete('/api/jobs/:id/candidates/:cid', auth.requireAuth, canWrite, jobHandler((req) => {
+  store.removeCandidateFromJob(req.user.org_id, req.params.id, req.params.cid);
+  return { ok: true };
+}));
+
+app.put('/api/jobs/:id/candidates/:cid/stage', auth.requireAuth, canWrite, jobHandler((req) => {
+  store.setJobStage(req.user.org_id, req.params.id, req.params.cid, (req.body || {}).stage);
+  audit.record(req.user.org_id, req.user.email, 'job.stage', String(req.params.id), { candidate: req.params.cid, stage: (req.body || {}).stage });
+  return { ok: true };
+}));
+
+// Rank the whole candidate pool against this job's JD (to add the best fits).
+app.post('/api/jobs/:id/match', auth.requireAuth, (req, res) => {
+  const job = store.getJob(req.user.org_id, req.params.id);
+  if (!job) return res.status(404).json({ error: 'job not found' });
+  if (!job.description || !job.description.trim()) return res.status(400).json({ error: 'this job has no description to match against' });
+  const result = matchCandidates(job.description, store.listCandidates(req.user.org_id), { blind: !!(req.body || {}).blind });
+  audit.record(req.user.org_id, req.user.email, 'job.match', String(job.id), { blind: !!(req.body || {}).blind, candidates: result.results.length });
+  res.json(result);
+});
+
 // Saved views: named q/skill filter combinations.
 app.get('/api/views', auth.requireAuth, (req, res) => res.json({ views: store.listViews(req.user.org_id) }));
 app.post('/api/views', auth.requireAuth, canWrite, (req, res) => {
