@@ -16,6 +16,8 @@ const { db } = require('./db');
 const SESSION_DAYS = 7;
 const SCRYPT_N = 16384;
 const ROLES = ['admin', 'recruiter', 'viewer'];
+const RESET_TTL_MIN = 30;
+const INVITE_TTL_DAYS = 7;
 
 function hashPassword(password) {
   const salt = crypto.randomBytes(16).toString('hex');
@@ -76,6 +78,92 @@ function invite(orgId, email, password, role) {
 
 function listMembers(orgId) {
   return db.prepare('SELECT email, role, created_at FROM users WHERE org_id = ? ORDER BY created_at').all(orgId);
+}
+
+// ---- password reset --------------------------------------------------
+
+// Always succeeds from the caller's view (don't reveal whether the email is
+// registered). Returns a token only when a matching user exists.
+function requestPasswordReset(email) {
+  email = String(email || '').trim().toLowerCase();
+  const user = db.prepare('SELECT id FROM users WHERE email = ?').get(email);
+  if (!user) return null;
+  const token = crypto.randomBytes(32).toString('hex');
+  const expires = new Date(Date.now() + RESET_TTL_MIN * 60 * 1000).toISOString();
+  db.prepare('DELETE FROM reset_tokens WHERE user_id = ?').run(user.id); // one live token per user
+  db.prepare('INSERT INTO reset_tokens (token, user_id, expires_at) VALUES (?, ?, ?)').run(token, user.id, expires);
+  return { token, email };
+}
+
+function resetPassword(token, newPassword) {
+  const row = db.prepare("SELECT user_id FROM reset_tokens WHERE token = ? AND expires_at > datetime('now')").get(token || '');
+  if (!row) throw httpError(400, 'this reset link is invalid or has expired');
+  if (String(newPassword || '').length < 8) throw httpError(400, 'password must be at least 8 characters');
+  const tx = db.transaction(() => {
+    db.prepare('UPDATE users SET password_hash = ? WHERE id = ?').run(hashPassword(newPassword), row.user_id);
+    db.prepare('DELETE FROM reset_tokens WHERE user_id = ?').run(row.user_id);
+    db.prepare('DELETE FROM sessions WHERE user_id = ?').run(row.user_id); // force re-login everywhere
+  });
+  tx();
+  return login(emailForUser(row.user_id), newPassword);
+}
+
+function emailForUser(userId) {
+  return db.prepare('SELECT email FROM users WHERE id = ?').get(userId).email;
+}
+
+// ---- invite by link (invitee sets their own password) -----------------
+
+function createInvite(orgId, email, role, invitedBy) {
+  email = String(email || '').trim().toLowerCase();
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw httpError(400, 'invalid email');
+  if (!ROLES.includes(role)) throw httpError(400, `role must be one of: ${ROLES.join(', ')}`);
+  if (db.prepare('SELECT 1 FROM users WHERE email = ?').get(email)) {
+    throw httpError(409, 'an account with this email already exists');
+  }
+  const token = crypto.randomBytes(24).toString('hex');
+  const expires = new Date(Date.now() + INVITE_TTL_DAYS * 24 * 3600 * 1000).toISOString();
+  db.prepare(
+    'INSERT INTO invites (token, org_id, email, role, invited_by, expires_at) VALUES (?, ?, ?, ?, ?, ?)'
+  ).run(token, orgId, email, role, invitedBy || null, expires);
+  return { token, email, role };
+}
+
+function getInvite(token) {
+  const row = db
+    .prepare(
+      `SELECT i.email, i.role, i.accepted_at, i.expires_at, o.name AS org_name
+       FROM invites i JOIN orgs o ON o.id = i.org_id WHERE i.token = ?`
+    )
+    .get(token || '');
+  if (!row) throw httpError(404, 'invite not found');
+  if (row.accepted_at) throw httpError(410, 'this invite has already been used');
+  if (row.expires_at <= new Date().toISOString()) throw httpError(410, 'this invite has expired');
+  return { email: row.email, role: row.role, org_name: row.org_name };
+}
+
+function acceptInvite(token, password) {
+  const row = db.prepare('SELECT org_id, email, role, accepted_at, expires_at FROM invites WHERE token = ?').get(token || '');
+  if (!row) throw httpError(404, 'invite not found');
+  if (row.accepted_at) throw httpError(410, 'this invite has already been used');
+  if (row.expires_at <= new Date().toISOString()) throw httpError(410, 'this invite has expired');
+  if (String(password || '').length < 8) throw httpError(400, 'password must be at least 8 characters');
+
+  const create = db.transaction(() => {
+    const userId = db
+      .prepare('INSERT INTO users (email, password_hash, org_id, role) VALUES (?, ?, ?, ?)')
+      .run(row.email, hashPassword(password), row.org_id, row.role).lastInsertRowid;
+    db.prepare("UPDATE invites SET accepted_at = datetime('now') WHERE token = ?").run(token);
+    return userId;
+  });
+  let userId;
+  try {
+    userId = create();
+  } catch (err) {
+    if (String(err.message).includes('UNIQUE')) throw httpError(409, 'an account with this email already exists');
+    throw err;
+  }
+  return createSession(userId);
 }
 
 function login(email, password) {
@@ -149,4 +237,7 @@ function httpError(status, message) {
   return err;
 }
 
-module.exports = { register, login, logout, invite, listMembers, requireAuth, requireRole, userForToken, ROLES };
+module.exports = {
+  register, login, logout, invite, listMembers, requireAuth, requireRole, userForToken, ROLES,
+  requestPasswordReset, resetPassword, createInvite, getInvite, acceptInvite,
+};

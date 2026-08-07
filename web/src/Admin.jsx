@@ -1,24 +1,26 @@
-import { useEffect, useState } from 'react';
-import { api } from './api';
+import { useEffect, useRef, useState } from 'react';
+import { api, downloadFile } from './api';
+import { useToast } from './Toast';
 
-// Admin-only view: the org's teammates (with an invite form) and the audit
-// trail of every action taken on candidate data. Both are org-scoped by the
-// server; this is purely a window onto them.
+// Admin-only view: teammates (invited by shareable link), a backup/restore
+// panel, and the audit trail. Everything is org-scoped by the server.
 
 export default function Admin() {
   return (
     <section className="admin">
       <Members />
+      <Backup />
       <AuditLog />
     </section>
   );
 }
 
 function Members() {
+  const toast = useToast();
   const [members, setMembers] = useState([]);
   const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
   const [role, setRole] = useState('recruiter');
+  const [link, setLink] = useState(null);
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
 
@@ -30,15 +32,20 @@ function Members() {
     setBusy(true);
     setError(null);
     try {
-      await api('/api/org/members', { method: 'POST', body: { email, password, role } });
+      const res = await api('/api/org/invites', { method: 'POST', body: { email, role } });
+      setLink(res.link);
       setEmail('');
-      setPassword('');
+      toast(`Invite created for ${res.email}`);
       load();
     } catch (err) {
       setError(err.message);
     } finally {
       setBusy(false);
     }
+  }
+
+  function copy() {
+    navigator.clipboard?.writeText(link).then(() => toast('Invite link copied', 'info')).catch(() => {});
   }
 
   return (
@@ -55,16 +62,66 @@ function Members() {
 
       <form className="invite" onSubmit={invite}>
         <input type="email" placeholder="teammate@email.com" value={email} onChange={(e) => setEmail(e.target.value)} required />
-        <input type="password" placeholder="temp password (min 8)" value={password} onChange={(e) => setPassword(e.target.value)} required minLength={8} />
         <select value={role} onChange={(e) => setRole(e.target.value)} className="role-select">
           <option value="admin">admin</option>
           <option value="recruiter">recruiter</option>
           <option value="viewer">viewer</option>
         </select>
-        <button className="ghost" disabled={busy}>{busy ? 'inviting…' : 'invite'}</button>
+        <button className="ghost" disabled={busy}>{busy ? 'creating…' : 'create invite link'}</button>
       </form>
-      <p className="admin-hint">admins manage the team · recruiters upload & edit · viewers are read-only</p>
+
+      {link && (
+        <div className="invite-link">
+          <span className="il-label">Share this link — they set their own password:</span>
+          <div className="il-row">
+            <input readOnly value={link} onFocus={(e) => e.target.select()} />
+            <button className="ghost sm" onClick={copy}>copy</button>
+          </div>
+          <span className="il-note">Also emailed to them (when a mail server is configured).</span>
+        </div>
+      )}
+
+      <p className="admin-hint">admins manage the team · recruiters upload &amp; edit · viewers are read-only</p>
       {error && <div className="err-banner">{error}</div>}
+    </div>
+  );
+}
+
+function Backup() {
+  const toast = useToast();
+  const fileRef = useRef(null);
+  const [busy, setBusy] = useState(false);
+
+  function download() {
+    downloadFile('/api/org/backup', 'candidate-db-backup.json')
+      .then(() => toast('Backup downloaded'))
+      .catch((e) => toast(e.message, 'bad'));
+  }
+
+  async function restore(file) {
+    if (!file) return;
+    if (!window.confirm('Restore this backup into the current organization? It adds to what is already here.')) return;
+    setBusy(true);
+    try {
+      const data = JSON.parse(await file.text());
+      const res = await api('/api/org/restore', { method: 'POST', body: data });
+      toast(`Restored — ${res.candidates} candidates on file`);
+    } catch (err) {
+      toast(err.message, 'bad');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="admin-block">
+      <h2>backup &amp; restore</h2>
+      <div className="backup-row">
+        <button className="ghost" onClick={download}>download backup (.json)</button>
+        <button className="ghost" onClick={() => fileRef.current?.click()} disabled={busy}>{busy ? 'restoring…' : 'restore from file'}</button>
+        <input ref={fileRef} type="file" accept=".json" hidden onChange={(e) => { restore(e.target.files[0]); e.target.value = ''; }} />
+      </div>
+      <p className="admin-hint">A backup is a portable JSON snapshot of every candidate, stage, tag and saved template in this org.</p>
     </div>
   );
 }

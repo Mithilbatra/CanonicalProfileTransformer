@@ -368,6 +368,59 @@ function deleteJdTemplate(orgId, id) {
   if (!info.changes) throw httpError(404, 'template not found');
 }
 
+// ---- backup / restore (data durability) -------------------------------
+
+// A full, portable snapshot of one org's candidate data. Subjects are the
+// source of truth; candidates rebuild from them, so the backup carries raw
+// subjects plus the human layers (meta, views, JD templates).
+function exportOrg(orgId) {
+  return {
+    version: 1,
+    exported_at: new Date().toISOString(),
+    subjects: db.prepare('SELECT source_id, source_type, subject FROM subjects WHERE org_id = ? ORDER BY id').all(orgId),
+    meta: db.prepare('SELECT candidate_id, stage, tags, note FROM candidate_meta WHERE org_id = ?').all(orgId),
+    views: db.prepare('SELECT name, q, skill, created_by FROM views WHERE org_id = ?').all(orgId),
+    jd_templates: db.prepare('SELECT name, jd, created_by FROM jd_templates WHERE org_id = ?').all(orgId),
+  };
+}
+
+// Import a snapshot into an org (appends; identical subjects re-merge by
+// identity into the same candidates, so meta keyed by candidate_id reattaches).
+function importOrg(orgId, data) {
+  if (!data || !Array.isArray(data.subjects)) throw httpError(400, 'invalid backup: missing subjects[]');
+  const insertSubject = db.prepare('INSERT INTO subjects (org_id, source_id, source_type, subject) VALUES (?, ?, ?, ?)');
+  const insertKey = db.prepare('INSERT INTO subject_keys (org_id, subject_id, key) VALUES (?, ?, ?)');
+
+  db.transaction(() => {
+    for (const s of data.subjects) {
+      const parsed = typeof s.subject === 'string' ? JSON.parse(s.subject) : s.subject;
+      const id = insertSubject.run(orgId, s.source_id, s.source_type, JSON.stringify(parsed)).lastInsertRowid;
+      for (const key of subjectKeys(parsed)) insertKey.run(orgId, id, key);
+    }
+    for (const v of data.views || []) {
+      db.prepare('INSERT OR IGNORE INTO views (org_id, name, q, skill, created_by) VALUES (?, ?, ?, ?, ?)')
+        .run(orgId, v.name, v.q || null, v.skill || null, v.created_by || null);
+    }
+    for (const t of data.jd_templates || []) {
+      db.prepare('INSERT OR IGNORE INTO jd_templates (org_id, name, jd, created_by) VALUES (?, ?, ?, ?)')
+        .run(orgId, t.name, t.jd, t.created_by || null);
+    }
+  })();
+
+  rebuild(orgId); // materialize candidates from the imported subjects
+
+  // meta reattaches only for candidate_ids that actually exist after the merge
+  for (const m of data.meta || []) {
+    if (db.prepare('SELECT 1 FROM candidates WHERE org_id = ? AND candidate_id = ?').get(orgId, m.candidate_id)) {
+      db.prepare(
+        `INSERT INTO candidate_meta (org_id, candidate_id, stage, tags, note) VALUES (?, ?, ?, ?, ?)
+         ON CONFLICT(org_id, candidate_id) DO UPDATE SET stage = excluded.stage, tags = excluded.tags, note = excluded.note`
+      ).run(orgId, m.candidate_id, m.stage || 'new', typeof m.tags === 'string' ? m.tags : JSON.stringify(m.tags || []), m.note || null);
+    }
+  }
+  return { subjects: data.subjects.length, candidates: countCandidates(orgId) };
+}
+
 function countCandidates(orgId) {
   return db.prepare('SELECT COUNT(*) AS n FROM candidates WHERE org_id = ?').get(orgId).n;
 }
@@ -410,6 +463,8 @@ module.exports = {
   listJdTemplates,
   saveJdTemplate,
   deleteJdTemplate,
+  exportOrg,
+  importOrg,
   OVERRIDABLE,
   STAGES,
 };

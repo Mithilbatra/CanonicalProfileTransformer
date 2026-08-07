@@ -150,6 +150,27 @@ db.exec(`
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
     UNIQUE (org_id, name)
   );
+
+  -- Single-use password-reset tokens (short-lived).
+  CREATE TABLE IF NOT EXISTS reset_tokens (
+    token      TEXT PRIMARY KEY,
+    user_id    INTEGER NOT NULL REFERENCES users(id),
+    expires_at TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  -- Pending teammate invites: a link the invitee opens to set their own
+  -- password and join the org. No admin-chosen password required.
+  CREATE TABLE IF NOT EXISTS invites (
+    token       TEXT PRIMARY KEY,
+    org_id      INTEGER NOT NULL,
+    email       TEXT NOT NULL,
+    role        TEXT NOT NULL,
+    invited_by  TEXT,
+    accepted_at TEXT,
+    expires_at  TEXT NOT NULL,
+    created_at  TEXT NOT NULL DEFAULT (datetime('now'))
+  );
 `);
 
 if (isLegacy) migrateLegacy();

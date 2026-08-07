@@ -5,7 +5,16 @@ import Insights from './Insights';
 import Admin from './Admin';
 import Login from './Login';
 import ErrorBoundary from './ErrorBoundary';
-import { api, getSession, clearSession } from './api';
+import { ResetPassword, AcceptInvite } from './AuthFlow';
+import { api, getSession, clearSession, saveSession } from './api';
+
+// Detect a token flow from the URL (?reset=… / ?invite=…) once, on load.
+function initialFlow() {
+  const p = new URLSearchParams(window.location.search);
+  if (p.get('reset')) return { kind: 'reset', token: p.get('reset') };
+  if (p.get('invite')) return { kind: 'invite', token: p.get('invite') };
+  return null;
+}
 
 // First visit follows the OS colour scheme; after that we honour the choice
 // the user actually made.
@@ -19,6 +28,19 @@ export default function App() {
   const [view, setView] = useState('playground');
   const [session, setSession] = useState(getSession());
   const [theme, setTheme] = useState(initialTheme);
+  const [flow, setFlow] = useState(initialFlow);
+
+  // Finish a token flow: clear the ?reset/?invite from the URL, and if it
+  // produced a session, sign the user straight into the database.
+  function endFlow(newSession) {
+    window.history.replaceState({}, '', window.location.pathname);
+    setFlow(null);
+    if (newSession) {
+      saveSession(newSession);
+      setSession(newSession);
+      setView('database');
+    }
+  }
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -80,15 +102,23 @@ export default function App() {
           </p>
         </header>
 
-        <ErrorBoundary resetKey={view}>
-          {view === 'playground' && <Playground />}
-          {view === 'database' && (session
-            ? <Candidates />
-            : <Login onLogin={setSession} />)}
-          {view === 'insights' && (session
-            ? <Insights />
-            : <Login onLogin={setSession} />)}
-          {view === 'admin' && isAdmin && <Admin />}
+        <ErrorBoundary resetKey={flow ? flow.token : view}>
+          {flow ? (
+            flow.kind === 'reset'
+              ? <ResetPassword token={flow.token} onDone={endFlow} />
+              : <AcceptInvite token={flow.token} onDone={endFlow} />
+          ) : (
+            <>
+              {view === 'playground' && <Playground />}
+              {view === 'database' && (session
+                ? <Candidates />
+                : <Login onLogin={setSession} />)}
+              {view === 'insights' && (session
+                ? <Insights />
+                : <Login onLogin={setSession} />)}
+              {view === 'admin' && isAdmin && <Admin />}
+            </>
+          )}
         </ErrorBoundary>
       </div>
 

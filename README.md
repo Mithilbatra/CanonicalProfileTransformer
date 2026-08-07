@@ -64,6 +64,11 @@ Beyond the one-shot pipeline, the app also runs as a **persistent candidate data
 - **Rate-limited auth, Docker & CI** — login/register are throttled per IP; a
   multi-stage `Dockerfile` + `docker-compose.yml` build and run the whole app
   (`docker compose up --build`), and GitHub Actions runs the test suite on every push.
+- **Frictionless onboarding** — a new org can **load sample candidates** in one click,
+  **password reset** and teammate **invite-by-link** (the invitee sets their own password —
+  no admin-chosen passwords), and a **backup / restore** panel that snapshots an org to
+  portable JSON. Emails go out over SMTP when `SMTP_URL` is set; in development the links
+  are surfaced in-app so the flows work without a mail server.
 - **Hardened live fetch** — GitHub calls get timeouts, retry with backoff, a TTL cache
   and request spacing; set `GITHUB_TOKEN` to raise the API rate limit.
 - **PDF hyperlink recovery** — the URLs behind clickable words ("LinkedIn", "GitHub")

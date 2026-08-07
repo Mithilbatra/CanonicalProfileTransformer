@@ -171,6 +171,19 @@ export default function Candidates() {
     }
   }
 
+  async function seedDemo() {
+    setBusy(true);
+    try {
+      const res = await api('/api/demo/seed', { method: 'POST' });
+      toast(`Loaded ${res.totalCandidates} sample candidates`);
+      await load();
+    } catch (err) {
+      toast(err.message, 'bad');
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function bulkDelete() {
     if (!window.confirm(`Delete ${picked.size} candidate${picked.size === 1 ? '' : 's'} and all their source data?`)) return;
     try {
@@ -290,7 +303,18 @@ export default function Candidates() {
             <SkeletonRows />
           ) : list.length === 0 ? (
             <div className="empty-state">
-              {match ? 'No candidates matched — try a broader job description.' : 'No candidates yet — upload resumes, CSVs or ATS exports above.'}
+              {match ? (
+                'No candidates matched — try a broader job description.'
+              ) : (
+                <>
+                  No candidates yet — upload files above, or
+                  <div style={{ marginTop: 14 }}>
+                    <button className="run" onClick={seedDemo} disabled={busy}>
+                      {busy ? 'loading…' : 'Load sample candidates'}
+                    </button>
+                  </div>
+                </>
+              )}
             </div>
           ) : match ? (
             match.results.map((r) => (

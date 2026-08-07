@@ -12,6 +12,7 @@ const { matchCandidates } = require('./engine/match');
 const { suggestImprovements } = require('./engine/suggest');
 const { insights } = require('./analytics');
 const { rateLimit } = require('./lib/ratelimit');
+const mailer = require('./lib/mailer');
 const auth = require('./auth');
 const store = require('./store');
 const audit = require('./audit');
@@ -66,6 +67,51 @@ app.post('/api/auth/logout', auth.requireAuth, (req, res) => {
   res.json({ ok: true });
 });
 
+// Forgot password: always reports success (don't leak whether the email is
+// registered). When it is, we email a reset link; in dev the link is returned
+// so a solo developer can use it without a mail server.
+app.post('/api/auth/forgot', authLimiter, async (req, res) => {
+  const { email } = req.body || {};
+  const result = auth.requestPasswordReset(email);
+  if (result) {
+    const link = mailer.appUrl(`/?reset=${result.token}`);
+    await mailer.send({
+      to: result.email,
+      subject: 'Reset your Profile Transformer password',
+      text: `Open this link to set a new password (valid 30 minutes):\n\n${link}\n\nIf you didn't request this, ignore this email.`,
+    });
+    if (!mailer.isProd) return res.json({ ok: true, devLink: link });
+  }
+  res.json({ ok: true });
+});
+
+app.post('/api/auth/reset', authLimiter, (req, res) => {
+  try {
+    const { token, password } = req.body || {};
+    res.json(auth.resetPassword(token, password));
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+// ---- teammate invites by link ----------------------------------------
+
+app.get('/api/invites/:token', (req, res) => {
+  try {
+    res.json(auth.getInvite(req.params.token));
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+app.post('/api/invites/:token/accept', authLimiter, (req, res) => {
+  try {
+    res.json(auth.acceptInvite(req.params.token, (req.body || {}).password));
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
 app.get('/api/auth/me', auth.requireAuth, (req, res) => {
   const { email, role, org_id, org_name } = req.user;
   res.json({ email, role, org_id, org_name });
@@ -88,8 +134,44 @@ app.post('/api/org/members', auth.requireAuth, auth.requireRole('admin'), (req, 
   }
 });
 
+// Invite a teammate by link: they open it and set their own password (no
+// admin-chosen password). Emails the link; returns it directly in dev.
+app.post('/api/org/invites', auth.requireAuth, auth.requireRole('admin'), async (req, res) => {
+  try {
+    const { email, role } = req.body || {};
+    const inv = auth.createInvite(req.user.org_id, email, role, req.user.email);
+    const link = mailer.appUrl(`/?invite=${inv.token}`);
+    await mailer.send({
+      to: inv.email,
+      subject: `You're invited to ${req.user.org_name} on Profile Transformer`,
+      text: `${req.user.email} invited you to join ${req.user.org_name} as ${inv.role}.\n\nAccept and set your password here:\n\n${link}`,
+    });
+    audit.record(req.user.org_id, req.user.email, 'member.invite', inv.email, { role: inv.role });
+    res.json({ email: inv.email, role: inv.role, link, devLink: mailer.isProd ? undefined : link });
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
 app.get('/api/audit', auth.requireAuth, auth.requireRole('admin'), (req, res) => {
   res.json({ entries: audit.list(req.user.org_id, { limit: req.query.limit, action: req.query.action }) });
+});
+
+// Full org backup (download) and restore (upload) — data durability.
+app.get('/api/org/backup', auth.requireAuth, auth.requireRole('admin'), (req, res) => {
+  audit.record(req.user.org_id, req.user.email, 'org.backup', null);
+  res.setHeader('Content-Disposition', 'attachment; filename="candidate-db-backup.json"');
+  res.json(store.exportOrg(req.user.org_id));
+});
+
+app.post('/api/org/restore', auth.requireAuth, auth.requireRole('admin'), (req, res) => {
+  try {
+    const result = store.importOrg(req.user.org_id, req.body || {});
+    audit.record(req.user.org_id, req.user.email, 'org.restore', null, result);
+    res.json(result);
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
 });
 
 // ---- stateless playground (no auth, nothing stored) ------------------
@@ -149,6 +231,23 @@ app.post('/api/upload', auth.requireAuth, canWrite, upload.array('files'), async
       files: sourceReport.map((s) => s.source), subjectsAdded, totalCandidates,
     });
     res.json({ sources: sourceReport, subjectsAdded, totalCandidates });
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+// Seed the caller's org with the built-in sample candidates so a new account
+// has something to explore in one click.
+app.post('/api/demo/seed', auth.requireAuth, canWrite, async (req, res) => {
+  try {
+    const files = ['recruiter.csv', 'ats.json', 'github.json', 'recruiter_notes.txt'];
+    const sources = files
+      .map((name) => ({ name, content: readIf(path.join(SAMPLES, name)) }))
+      .filter((s) => s.content);
+    const { sourceResults } = await extractSources(sources, { allowNetwork: false });
+    const { subjectsAdded, totalCandidates } = store.ingestSources(req.user.org_id, sourceResults);
+    audit.record(req.user.org_id, req.user.email, 'demo.seed', null, { subjectsAdded, totalCandidates });
+    res.json({ subjectsAdded, totalCandidates });
   } catch (err) {
     res.status(err.status || 500).json({ error: err.message });
   }
