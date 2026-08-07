@@ -10,3 +10,8 @@ samples2
 output
 out.json
 **/*.md
+benchmark
+DEPLOY.md
+render.yaml
+fly.toml
+.env.example

@@ -414,16 +414,24 @@ of the strongest identity signal, so the same inputs always produce byte-identic
   ingest, which is simple, deterministic, and fine for tens of thousands of subjects.
 - Multi-tenancy — every account shares one candidate pool per deployment.
 
-## Tests
+## Tests & quality benchmark
 
-`npm test` runs four suites (30 tests):
+`npm test` runs the full suite (70 tests) — the normalization/pipeline/resume core, plus
+the multi-tenant store, matching, workflow (stages/tags/notes/bulk), jobs, onboarding
+(reset/invite/backup), and a benchmark gate. Highlights:
 
 - `test/normalize.test.js` — value normalization, skill canonicalization, link classification.
 - `test/pipeline.test.js` — entity resolution, link-only merge, agreement-driven confidence,
-  end-to-end normalization, schema validity for both configs, graceful degradation on
-  garbage, empty input, all three `on_missing` modes, determinism.
-- `test/resume.test.js` — resume extraction (name/contact/sections), detection, Jaro-Winkler
-  and name similarity, fuzzy merge with corroboration, fuzzy refusal on conflicting emails.
-- `test/store.test.js` — cross-upload dedup against stored subjects, search/filter,
-  override lifecycle (win → survive rebuild → reset), delete without resurrection,
-  auth register/login/logout.
+  end-to-end normalization, schema validity, graceful degradation, determinism.
+- `test/resume.test.js` — resume extraction, PDF-glue repair, Jaro-Winkler, fuzzy merge/refuse.
+- `test/store.test.js` / `workflow` / `jobs` / `onboarding` — multi-tenancy isolation,
+  incremental-merge-equals-full-rebuild, pipeline stages, per-job stages, invites, backup/restore.
+
+**Engine quality is measured, not assumed.** `npm run benchmark` runs a labeled set of
+tricky scenarios (multi-source conflict, fuzzy merge/refuse, glued-PDF resume, link-only
+merge) through the real engine and reports extraction + entity-resolution accuracy
+(currently 100%, 20/20 checks). `test/benchmark.test.js` fails CI if accuracy regresses
+below a floor, so tuning the fuzzy thresholds or confidence weights is safe and measurable.
+
+See [DEPLOY.md](DEPLOY.md) for shipping it (Docker / Render / Fly), the security headers,
+and the SQLite→Postgres scaling path.

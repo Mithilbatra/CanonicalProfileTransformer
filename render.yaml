@@ -1,0 +1,27 @@
+# One-click deploy to Render (https://render.com) — Blueprint format.
+# Builds the Docker image and runs it with a persistent disk for the database.
+services:
+  - type: web
+    name: profile-transformer
+    runtime: docker
+    plan: starter
+    healthCheckPath: /api/health
+    envVars:
+      - key: PORT
+        value: 4000
+      - key: DB_PATH
+        value: /app/data/app.db
+      - key: TRUST_PROXY
+        value: 1
+      - key: NODE_ENV
+        value: production
+      - key: APP_URL
+        sync: false # set to the service's public URL after first deploy
+      - key: SMTP_URL
+        sync: false # set to enable password-reset / invite emails
+      - key: MAIL_FROM
+        sync: false
+    disk:
+      name: cpt-data
+      mountPath: /app/data
+      sizeGB: 1

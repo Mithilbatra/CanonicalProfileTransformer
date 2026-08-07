@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const express = require('express');
 const cors = require('cors');
+const helmet = require('helmet');
 const multer = require('multer');
 const Papa = require('papaparse');
 const { runPipeline, extractSources, DEFAULT_CONFIG } = require('./engine/pipeline');
@@ -28,6 +29,31 @@ const CONFIGS = path.join(ROOT, 'configs');
 const WEB_DIST = path.join(ROOT, 'web', 'dist');
 
 const app = express();
+
+// Behind a reverse proxy in production (Render/Fly/nginx), trust the first hop
+// so req.ip (used by the rate limiter) and X-Forwarded-Proto are correct.
+if (process.env.TRUST_PROXY) app.set('trust proxy', 1);
+
+// Security headers. The CSP is scoped to what this app actually loads:
+// same-origin scripts/styles/data, Google Fonts, and same-origin XHR.
+app.use(
+  helmet({
+    contentSecurityPolicy: {
+      directives: {
+        defaultSrc: ["'self'"],
+        scriptSrc: ["'self'"],
+        styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
+        fontSrc: ["'self'", 'https://fonts.gstatic.com'],
+        imgSrc: ["'self'", 'data:'],
+        connectSrc: ["'self'"],
+        objectSrc: ["'none'"],
+      },
+    },
+    // the app fetches its own API and opens candidate links in new tabs
+    crossOriginEmbedderPolicy: false,
+  })
+);
+
 app.use(cors());
 app.use(express.json({ limit: '5mb' }));
 
