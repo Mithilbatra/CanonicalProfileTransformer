@@ -12,7 +12,7 @@ const Database = require('better-sqlite3');
 // so one organization can never see or merge with another's data.
 
 const DB_PATH = process.env.DB_PATH || path.join(__dirname, '..', 'data', 'app.db');
-const SCHEMA_VERSION = 3;
+const SCHEMA_VERSION = 4;
 
 if (DB_PATH !== ':memory:') {
   fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
@@ -239,6 +239,30 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS idx_candidate_skills_skill ON candidate_skills(org_id, skill);
   CREATE INDEX IF NOT EXISTS idx_candidate_skills_cid ON candidate_skills(org_id, candidate_id);
+
+  -- Human-asserted "these are the same person" links between subjects. The
+  -- deterministic engine keeps candidates apart when it isn't sure; a recruiter
+  -- can force a merge, which records a shared link_id here. Subjects sharing a
+  -- link_id are unioned during resolution (see engine/merge.resolveEntities).
+  CREATE TABLE IF NOT EXISTS subject_links (
+    org_id     INTEGER NOT NULL,
+    link_id    TEXT NOT NULL,
+    subject_id INTEGER NOT NULL,
+    created_by TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+  CREATE INDEX IF NOT EXISTS idx_subject_links_sid ON subject_links(org_id, subject_id);
+  CREATE INDEX IF NOT EXISTS idx_subject_links_lid ON subject_links(org_id, link_id);
+
+  -- Duplicate suggestions a recruiter dismissed as "not the same person", keyed
+  -- by the pair of candidate ids, so they don't keep resurfacing.
+  CREATE TABLE IF NOT EXISTS merge_dismissals (
+    org_id     INTEGER NOT NULL,
+    pair_key   TEXT NOT NULL,
+    created_by TEXT,
+    created_at TEXT NOT NULL DEFAULT (datetime('now')),
+    PRIMARY KEY (org_id, pair_key)
+  );
 `);
 
 if (isLegacy) migrateLegacy();

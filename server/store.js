@@ -1,8 +1,10 @@
 'use strict';
 
+const crypto = require('crypto');
 const { db } = require('./db');
 const { resolveEntities, buildRecord, subjectKeys } = require('./engine/merge');
 const { overallConfidence } = require('./engine/confidence');
+const { nameSimilarity, nameTokens } = require('./engine/fuzzy');
 
 // The candidate store. The source of truth is the `subjects` table (raw
 // extracted observations); `candidates` is a materialization of it.
@@ -147,7 +149,14 @@ function remerge(orgId, subjectIds) {
   const rows = db
     .prepare(`SELECT id, subject FROM subjects WHERE org_id = ? AND id IN (${marks}) ORDER BY id`)
     .all(orgId, ...subjectIds);
-  const subjects = rows.map((r) => ({ ...JSON.parse(r.subject), _dbId: r.id }));
+
+  // Attach any human-asserted merge links so resolveEntities unions them.
+  const linksBySubject = new Map();
+  for (const lr of db.prepare(`SELECT subject_id, link_id FROM subject_links WHERE org_id = ? AND subject_id IN (${marks})`).all(orgId, ...subjectIds)) {
+    if (!linksBySubject.has(lr.subject_id)) linksBySubject.set(lr.subject_id, []);
+    linksBySubject.get(lr.subject_id).push(lr.link_id);
+  }
+  const subjects = rows.map((r) => ({ ...JSON.parse(r.subject), _dbId: r.id, __links: linksBySubject.get(r.id) || [] }));
   const clusters = resolveEntities(subjects);
 
   db.transaction(() => {
@@ -180,6 +189,10 @@ function rebuild(orgId) {
     const insertKey = db.prepare('INSERT INTO subject_keys (org_id, subject_id, key) VALUES (?, ?, ?)');
     for (const r of rows) {
       for (const key of subjectKeys(JSON.parse(r.subject))) insertKey.run(orgId, r.id, key);
+    }
+    // re-apply human merge links as keys so incremental closures see them
+    for (const lr of db.prepare('SELECT subject_id, link_id FROM subject_links WHERE org_id = ?').all(orgId)) {
+      insertKey.run(orgId, lr.subject_id, `link:${lr.link_id}`);
     }
     db.prepare('DELETE FROM candidates WHERE org_id = ?').run(orgId);
     db.prepare('DELETE FROM candidate_index WHERE org_id = ?').run(orgId);
@@ -381,9 +394,11 @@ function deleteCandidate(orgId, candidateId) {
   const ids = JSON.parse(row.subject_ids);
   db.transaction(() => {
     const delKeys = db.prepare('DELETE FROM subject_keys WHERE org_id = ? AND subject_id = ?');
+    const delLinks = db.prepare('DELETE FROM subject_links WHERE org_id = ? AND subject_id = ?');
     const delSubject = db.prepare('DELETE FROM subjects WHERE org_id = ? AND id = ?');
     for (const id of ids) {
       delKeys.run(orgId, id); // keys reference subjects — remove them first
+      delLinks.run(orgId, id);
       delSubject.run(orgId, id);
     }
     db.prepare('DELETE FROM overrides WHERE org_id = ? AND candidate_id = ?').run(orgId, candidateId);
@@ -674,6 +689,173 @@ function purgeAllOrgs() {
   return { purged };
 }
 
+// ---- duplicate review: suggest, merge, dismiss, undo -------------------
+//
+// The deterministic engine keeps candidates apart whenever it isn't sure (a
+// wrong merge is worse than a missed one). This surfaces the near-misses for a
+// human to decide: pairs with similar names AND a corroborating signal that
+// were NOT auto-merged. A confirmed merge is recorded as a human link that the
+// resolver honors as its strongest key; it can be undone.
+
+const FREE_EMAIL_DOMAINS = new Set([
+  'gmail.com', 'yahoo.com', 'outlook.com', 'hotmail.com', 'icloud.com', 'proton.me', 'protonmail.com', 'aol.com', 'live.com',
+]);
+const SUGGEST_NAME_FLOOR = 0.6; // names must be plausibly the same person
+const SUGGEST_SCORE_MIN = 0.7;  // ...and carry at least one corroborating signal
+
+function pairKey(a, b) {
+  return [String(a), String(b)].sort().join('|');
+}
+
+function lc(s) { return String(s || '').toLowerCase().trim(); }
+function emailDomain(e) { const m = /@(.+)$/.exec(String(e || '')); return m ? m[1].toLowerCase() : null; }
+function round2(x) { return Math.round(x * 100) / 100; }
+
+// Similarity of two candidate records for duplicate review: name similarity is
+// the base; a shared employer / city / (non-free) email domain / skill overlap
+// each adds evidence. Returns the score, the raw name similarity, and reasons.
+function scorePair(a, b) {
+  const nameSim = nameSimilarity(a.full_name || '', b.full_name || '');
+  const reasons = [];
+  let score = nameSim;
+  if (nameSim >= SUGGEST_NAME_FLOOR) reasons.push(`names ${Math.round(nameSim * 100)}% similar`);
+
+  const compsB = new Set((b.experience || []).map((e) => lc(e.company)).filter(Boolean));
+  const sharedComp = (a.experience || []).map((e) => e.company).filter((c) => c && compsB.has(lc(c)));
+  if (sharedComp.length) { score += 0.15; reasons.push(`same employer: ${sharedComp[0]}`); }
+
+  const cityA = a.location && a.location.city ? lc(a.location.city) : null;
+  const cityB = b.location && b.location.city ? lc(b.location.city) : null;
+  if (cityA && cityA === cityB) { score += 0.1; reasons.push(`same city: ${a.location.city}`); }
+
+  const domB = new Set((b.emails || []).map(emailDomain).filter(Boolean));
+  const sharedDom = (a.emails || []).map(emailDomain).filter((d) => d && domB.has(d) && !FREE_EMAIL_DOMAINS.has(d));
+  if (sharedDom.length) { score += 0.1; reasons.push(`same email domain: ${sharedDom[0]}`); }
+
+  const skB = new Set((b.skills || []).map((s) => lc(s.name)));
+  const overlap = (a.skills || []).map((s) => lc(s.name)).filter((s) => skB.has(s)).length;
+  if (overlap >= 3) { score += 0.1; reasons.push(`${overlap} shared skills`); }
+
+  return { score: Math.min(1, round2(score)), nameSim, reasons };
+}
+
+function reviewSummary(id, rec) {
+  return {
+    candidate_id: id,
+    full_name: rec.full_name,
+    headline: rec.headline,
+    emails: rec.emails || [],
+    location: rec.location || null,
+    companies: [...new Set((rec.experience || []).map((e) => e.company).filter(Boolean))].slice(0, 3),
+    top_skills: [...(rec.skills || [])].sort((x, y) => (y.confidence || 0) - (x.confidence || 0)).slice(0, 5).map((s) => s.name),
+    overall_confidence: rec.overall_confidence,
+  };
+}
+
+// Candidate pairs worth reviewing as possible duplicates. Bucketed by name-token
+// prefix so this stays sub-quadratic on large pools.
+function findMergeSuggestions(orgId, { limit = 100 } = {}) {
+  const cands = db
+    .prepare('SELECT candidate_id, record FROM candidates WHERE org_id = ?')
+    .all(orgId)
+    .map((r) => ({ id: r.candidate_id, rec: JSON.parse(r.record) }));
+  const dismissed = new Set(db.prepare('SELECT pair_key FROM merge_dismissals WHERE org_id = ?').all(orgId).map((r) => r.pair_key));
+
+  const buckets = new Map();
+  for (const c of cands) {
+    const prefixes = new Set(nameTokens(c.rec.full_name || '').filter((t) => t.length >= 3).map((t) => t.slice(0, 3)));
+    for (const p of prefixes) { if (!buckets.has(p)) buckets.set(p, []); buckets.get(p).push(c); }
+  }
+
+  const seen = new Set();
+  const out = [];
+  for (const group of buckets.values()) {
+    for (let i = 0; i < group.length; i++) {
+      for (let j = i + 1; j < group.length; j++) {
+        const A = group[i]; const B = group[j];
+        const pk = pairKey(A.id, B.id);
+        if (seen.has(pk) || dismissed.has(pk)) continue;
+        seen.add(pk);
+        const s = scorePair(A.rec, B.rec);
+        if (s.nameSim >= SUGGEST_NAME_FLOOR && s.score >= SUGGEST_SCORE_MIN) {
+          out.push({ pair_key: pk, score: s.score, reasons: s.reasons, a: reviewSummary(A.id, A.rec), b: reviewSummary(B.id, B.rec) });
+        }
+      }
+    }
+  }
+  out.sort((x, y) => y.score - x.score);
+  return out.slice(0, limit);
+}
+
+function subjectIdsOf(orgId, candidateId) {
+  const row = db.prepare('SELECT subject_ids FROM candidates WHERE org_id = ? AND candidate_id = ?').get(orgId, candidateId);
+  return row ? JSON.parse(row.subject_ids) : null;
+}
+
+function candidateContaining(orgId, subjectId) {
+  for (const row of db.prepare('SELECT candidate_id, subject_ids FROM candidates WHERE org_id = ?').all(orgId)) {
+    if (JSON.parse(row.subject_ids).includes(subjectId)) return getCandidate(orgId, row.candidate_id);
+  }
+  return null;
+}
+
+// Force-merge two candidates: record a human link over the union of their
+// subjects and re-resolve. Returns the resulting (merged) candidate.
+function mergeCandidates(orgId, idA, idB, user) {
+  if (String(idA) === String(idB)) throw httpError(400, 'cannot merge a candidate with itself');
+  const a = subjectIdsOf(orgId, idA);
+  const b = subjectIdsOf(orgId, idB);
+  if (!a || !b) throw httpError(404, 'candidate not found');
+  const subjectIds = [...new Set([...a, ...b])];
+  const linkId = crypto.randomUUID();
+  db.transaction(() => {
+    const insLink = db.prepare('INSERT INTO subject_links (org_id, link_id, subject_id, created_by) VALUES (?, ?, ?, ?)');
+    const insKey = db.prepare('INSERT INTO subject_keys (org_id, subject_id, key) VALUES (?, ?, ?)');
+    for (const sid of subjectIds) {
+      insLink.run(orgId, linkId, sid, user || null);
+      insKey.run(orgId, sid, `link:${linkId}`);
+    }
+  })();
+  remerge(orgId, affectedClosure(orgId, subjectIds));
+  return { link_id: linkId, candidate: candidateContaining(orgId, subjectIds[0]) };
+}
+
+function dismissMergePair(orgId, idA, idB, user) {
+  db.prepare('INSERT OR IGNORE INTO merge_dismissals (org_id, pair_key, created_by) VALUES (?, ?, ?)').run(orgId, pairKey(idA, idB), user || null);
+  return { dismissed: pairKey(idA, idB) };
+}
+
+// Human merges still in force, each with the candidate they now form.
+function listManualMerges(orgId) {
+  const links = db
+    .prepare('SELECT link_id, COUNT(*) AS subjects, MIN(created_at) AS created_at, MIN(created_by) AS created_by FROM subject_links WHERE org_id = ? GROUP BY link_id')
+    .all(orgId);
+  return links.map((l) => {
+    const anySid = db.prepare('SELECT subject_id FROM subject_links WHERE org_id = ? AND link_id = ? LIMIT 1').get(orgId, l.link_id).subject_id;
+    const cand = candidateContaining(orgId, anySid);
+    return {
+      link_id: l.link_id,
+      subjects: l.subjects,
+      created_at: l.created_at,
+      created_by: l.created_by,
+      candidate: cand ? reviewSummary(cand.candidate_id, cand.record) : null,
+    };
+  });
+}
+
+// Undo a manual merge: drop the link and re-resolve, which re-splits the
+// candidates unless a real shared key still binds them.
+function undoMerge(orgId, linkId) {
+  const sids = db.prepare('SELECT subject_id FROM subject_links WHERE org_id = ? AND link_id = ?').all(orgId, linkId).map((r) => r.subject_id);
+  if (!sids.length) throw httpError(404, 'merge not found');
+  db.transaction(() => {
+    db.prepare('DELETE FROM subject_links WHERE org_id = ? AND link_id = ?').run(orgId, linkId);
+    db.prepare('DELETE FROM subject_keys WHERE org_id = ? AND key = ?').run(orgId, `link:${linkId}`);
+  })();
+  remerge(orgId, affectedClosure(orgId, sids));
+  return { unmerged: sids.length };
+}
+
 function countCandidates(orgId) {
   return db.prepare('SELECT COUNT(*) AS n FROM candidates WHERE org_id = ?').get(orgId).n;
 }
@@ -708,6 +890,11 @@ module.exports = {
   aiBudget,
   purgeExpired,
   purgeAllOrgs,
+  findMergeSuggestions,
+  mergeCandidates,
+  dismissMergePair,
+  listManualMerges,
+  undoMerge,
   setOverride,
   clearOverride,
   deleteCandidate,

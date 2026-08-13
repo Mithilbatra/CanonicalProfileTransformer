@@ -574,6 +574,48 @@ function jobContext(orgId, body) {
   return { title: null, description: null };
 }
 
+// ---- duplicate review ------------------------------------------------
+// Surface likely-duplicate candidate pairs the engine left apart, and let a
+// recruiter confirm a merge (a human link the resolver honors) or dismiss it.
+
+app.get('/api/merge/suggestions', auth.requireAuth, (req, res) => {
+  res.json({
+    suggestions: store.findMergeSuggestions(req.user.org_id),
+    manual: store.listManualMerges(req.user.org_id),
+  });
+});
+
+app.post('/api/merge', auth.requireAuth, canWrite, (req, res) => {
+  try {
+    const { a, b } = req.body || {};
+    if (!a || !b) return res.status(400).json({ error: 'body.a and body.b (candidate ids) are required' });
+    const result = store.mergeCandidates(req.user.org_id, a, b, req.user.email);
+    audit.record(req.user.org_id, req.user.email, 'candidates.merge', result.candidate ? result.candidate.candidate_id : null, { from: [a, b] });
+    res.json(result);
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+app.post('/api/merge/dismiss', auth.requireAuth, canWrite, (req, res) => {
+  const { a, b } = req.body || {};
+  if (!a || !b) return res.status(400).json({ error: 'body.a and body.b (candidate ids) are required' });
+  const result = store.dismissMergePair(req.user.org_id, a, b, req.user.email);
+  audit.record(req.user.org_id, req.user.email, 'candidates.merge_dismiss', null, { pair: [a, b] });
+  res.json(result);
+});
+
+app.post('/api/merge/undo', auth.requireAuth, canWrite, (req, res) => {
+  try {
+    const { link_id } = req.body || {};
+    const result = store.undoMerge(req.user.org_id, link_id);
+    audit.record(req.user.org_id, req.user.email, 'candidates.merge_undo', link_id, result);
+    res.json(result);
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
 // Screening analytics: funnel, confidence distribution, skill supply, sources.
 app.get('/api/insights', auth.requireAuth, (req, res) => {
   res.json(insights(req.user.org_id));

@@ -53,6 +53,13 @@ function resolveEntities(subjects) {
   for (const idx of [emailIndex, phoneIndex, linkIndex]) {
     for (const group of idx.values()) for (let k = 1; k < group.length; k++) union(group[0], group[k]);
   }
+
+  // human-asserted merges: subjects carrying the same __links id were declared
+  // the same person by a recruiter. Treated as the strongest key of all —
+  // an explicit human decision overrides the engine's caution.
+  const humanLinkIndex = new Map();
+  subjects.forEach((s, i) => (s.__links || []).forEach((lid) => addIndex(humanLinkIndex, lid, i)));
+  for (const group of humanLinkIndex.values()) for (let k = 1; k < group.length; k++) union(group[0], group[k]);
   // weak key
   for (const [key, group] of nameCompanyIndex) {
     if (key.startsWith('nc:')) for (let k = 1; k < group.length; k++) union(group[0], group[k]);

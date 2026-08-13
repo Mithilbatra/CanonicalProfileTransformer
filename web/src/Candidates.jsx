@@ -41,6 +41,12 @@ export default function Candidates() {
   const [aiQuery, setAiQuery] = useState('');
   const [aiSearch, setAiSearch] = useState(null);
   const aiOn = aiInfo && aiInfo.mode !== 'off';
+  const [dupOpen, setDupOpen] = useState(false);
+  const [dupCount, setDupCount] = useState(null);
+
+  const refreshDupCount = useCallback(() => {
+    api('/api/merge/suggestions').then((d) => setDupCount(d.suggestions.length)).catch(() => {});
+  }, []);
 
   const load = useCallback(async () => {
     try {
@@ -77,7 +83,8 @@ export default function Candidates() {
     api('/api/views').then((d) => setViews(d.views)).catch(() => {});
     api('/api/jd-templates').then((d) => setTemplates(d.templates)).catch(() => {});
     api('/api/ai/status').then(setAiInfo).catch(() => setAiInfo({ mode: 'off' }));
-  }, []);
+    refreshDupCount();
+  }, [refreshDupCount]);
 
   const clearPicked = () => setPicked(new Set());
   function togglePick(id) {
@@ -263,7 +270,10 @@ export default function Candidates() {
             <span className="ai-spark" aria-hidden>✦</span> AI search
           </button>
         )}
-        <button className="ghost" aria-pressed={matchOpen} onClick={() => { setMatchOpen(!matchOpen); setMatch(null); setAiOpen(false); setAiSearch(null); clearPicked(); }}>match a JD</button>
+        <button className="ghost" aria-pressed={matchOpen} onClick={() => { setMatchOpen(!matchOpen); setMatch(null); setAiOpen(false); setAiSearch(null); setDupOpen(false); clearPicked(); }}>match a JD</button>
+        <button className="ghost" aria-pressed={dupOpen} onClick={() => { setDupOpen(!dupOpen); setMatchOpen(false); setMatch(null); setAiOpen(false); setAiSearch(null); clearPicked(); }}>
+          review duplicates{dupCount ? ` (${dupCount})` : ''}
+        </button>
         <span className="export-group">
           {['csv', 'xlsx', 'json'].map((f) => (
             <button key={f} className="ghost sm" onClick={() => exportAs(f)} disabled={!candidates.length}>{f}</button>
@@ -354,7 +364,7 @@ export default function Candidates() {
         </div>
       )}
 
-      {!match && !aiSearch && picked.size > 0 && (
+      {!match && !aiSearch && !dupOpen && picked.size > 0 && (
         <div className="bulk-bar">
           <span className="bulk-count">{picked.size} selected</span>
           <span className="bulk-actions">
@@ -371,7 +381,7 @@ export default function Candidates() {
         </div>
       )}
 
-      {!match && !aiSearch && total > PAGE_SIZE && (
+      {!match && !aiSearch && !dupOpen && total > PAGE_SIZE && (
         <div className="pager">
           <span className="pager-info">
             {page * PAGE_SIZE + 1}–{Math.min(total, page * PAGE_SIZE + candidates.length)} of {total}
@@ -383,6 +393,9 @@ export default function Candidates() {
         </div>
       )}
 
+      {dupOpen ? (
+        <DuplicatesPanel onChanged={() => { load(); refreshDupCount(); }} />
+      ) : (
       <div className="db-layout">
         <div className="db-list">
           {loading && !candidates.length ? (
@@ -466,7 +479,94 @@ export default function Candidates() {
           />
         )}
       </div>
+      )}
     </section>
+  );
+}
+
+// Duplicate review: candidate pairs the engine left apart because it wasn't
+// sure. Confirm a merge (a human decision the resolver then honors), mark "not
+// a match", or undo an earlier manual merge.
+function DuplicatesPanel({ onChanged }) {
+  const toast = useToast();
+  const [data, setData] = useState(null);
+  const [busy, setBusy] = useState(null);
+
+  const load = useCallback(() => {
+    api('/api/merge/suggestions').then(setData).catch((e) => toast(e.message, 'bad'));
+  }, [toast]);
+  useEffect(load, [load]);
+
+  async function act(key, path, body, msg) {
+    setBusy(key);
+    try {
+      await api(path, { method: 'POST', body });
+      if (msg) toast(msg);
+      load();
+      onChanged();
+    } catch (err) {
+      toast(err.message, 'bad');
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  if (!data) return <div className="dup-panel"><div className="skeleton sk-bar" /></div>;
+
+  return (
+    <div className="dup-panel">
+      <p className="dup-lead">
+        {data.suggestions.length === 0
+          ? 'No likely duplicates — your pool looks clean.'
+          : `${data.suggestions.length} possible duplicate${data.suggestions.length === 1 ? '' : 's'}. The engine kept these apart because it wasn't certain — you decide.`}
+      </p>
+
+      {data.suggestions.map((s) => (
+        <div className="dup-card" key={s.pair_key}>
+          <div className="dup-top">
+            <span className="dup-score" style={{ color: confColor(s.score) }}>{Math.round(s.score * 100)}% match</span>
+            <span className="dup-reasons">{s.reasons.join(' · ')}</span>
+          </div>
+          <div className="dup-pair">
+            <DupSide c={s.a} />
+            <span className="dup-vs">≟</span>
+            <DupSide c={s.b} />
+          </div>
+          <div className="dup-actions">
+            <button className="run sm" disabled={busy === s.pair_key} onClick={() => act(s.pair_key, '/api/merge', { a: s.a.candidate_id, b: s.b.candidate_id }, 'Candidates merged')}>
+              {busy === s.pair_key ? 'merging…' : 'Merge'}
+            </button>
+            <button className="ghost sm" disabled={busy === s.pair_key} onClick={() => act(s.pair_key, '/api/merge/dismiss', { a: s.a.candidate_id, b: s.b.candidate_id }, 'Marked as different people')}>
+              not a match
+            </button>
+          </div>
+        </div>
+      ))}
+
+      {data.manual.length > 0 && (
+        <div className="dup-manual">
+          <div className="dup-sub">Manual merges</div>
+          {data.manual.map((m) => (
+            <div className="dup-manual-row" key={m.link_id}>
+              <span>{(m.candidate && m.candidate.full_name) || '(unnamed)'} — {m.subjects} source{m.subjects === 1 ? '' : 's'} joined</span>
+              <button className="linklike" disabled={busy === m.link_id} onClick={() => act(m.link_id, '/api/merge/undo', { link_id: m.link_id }, 'Merge undone')}>undo</button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DupSide({ c }) {
+  return (
+    <div className="dup-side">
+      <div className="dup-name">{c.full_name || '(unnamed)'}</div>
+      <div className="dup-meta">{c.headline || '—'}</div>
+      <div className="dup-meta">{c.emails[0] || 'no email'}{c.companies[0] ? ` · ${c.companies[0]}` : ''}</div>
+      {c.top_skills.length > 0 && <div className="dup-skills">{c.top_skills.join(', ')}</div>}
+      <div className="dup-cid">{c.candidate_id}</div>
+    </div>
   );
 }
 

@@ -90,4 +90,4 @@ function nameSimilarity(nameA, nameB) {
   return total / short.length;
 }
 
-module.exports = { jaroWinkler, nameSimilarity };
+module.exports = { jaroWinkler, nameSimilarity, nameTokens };
