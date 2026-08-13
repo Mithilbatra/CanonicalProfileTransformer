@@ -32,6 +32,11 @@ export default function Candidates() {
   const [jd, setJd] = useState('');
   const [blind, setBlind] = useState(false);
   const [match, setMatch] = useState(null);
+  const [aiInfo, setAiInfo] = useState(null);
+  const [aiOpen, setAiOpen] = useState(false);
+  const [aiQuery, setAiQuery] = useState('');
+  const [aiSearch, setAiSearch] = useState(null);
+  const aiOn = aiInfo && aiInfo.mode !== 'off';
 
   const load = useCallback(async () => {
     try {
@@ -60,6 +65,7 @@ export default function Candidates() {
   useEffect(() => {
     api('/api/views').then((d) => setViews(d.views)).catch(() => {});
     api('/api/jd-templates').then((d) => setTemplates(d.templates)).catch(() => {});
+    api('/api/ai/status').then(setAiInfo).catch(() => setAiInfo({ mode: 'off' }));
   }, []);
 
   const clearPicked = () => setPicked(new Set());
@@ -138,6 +144,24 @@ export default function Candidates() {
     }
   }
 
+  async function runAiSearch() {
+    if (!aiQuery.trim()) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await api('/api/ai/search', { method: 'POST', body: { query: aiQuery } });
+      setAiSearch(res);
+      setMatch(null);
+      setMatchOpen(false);
+      clearPicked();
+    } catch (err) {
+      setError(err.message);
+      toast(err.message, 'bad');
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function saveTemplate() {
     if (!jd.trim()) return;
     const name = window.prompt('Name this JD template:');
@@ -197,7 +221,7 @@ export default function Candidates() {
     }
   }
 
-  const list = match ? match.results : candidates;
+  const list = match ? match.results : aiSearch ? aiSearch.results : candidates;
 
   return (
     <section className="db">
@@ -223,7 +247,12 @@ export default function Candidates() {
           {stages.map((s) => <option key={s} value={s}>{STAGE_LABEL[s] || s}</option>)}
         </select>
         <button className="ghost" onClick={saveCurrentView} title="save the current filters as a named view">save view</button>
-        <button className="ghost" aria-pressed={matchOpen} onClick={() => { setMatchOpen(!matchOpen); setMatch(null); clearPicked(); }}>match a JD</button>
+        {aiOn && (
+          <button className="ghost ai-btn" aria-pressed={aiOpen} onClick={() => { setAiOpen(!aiOpen); if (aiOpen) setAiSearch(null); setMatchOpen(false); setMatch(null); clearPicked(); }}>
+            <span className="ai-spark" aria-hidden>✦</span> AI search
+          </button>
+        )}
+        <button className="ghost" aria-pressed={matchOpen} onClick={() => { setMatchOpen(!matchOpen); setMatch(null); setAiOpen(false); setAiSearch(null); clearPicked(); }}>match a JD</button>
         <span className="export-group">
           {['csv', 'xlsx', 'json'].map((f) => (
             <button key={f} className="ghost sm" onClick={() => exportAs(f)} disabled={!candidates.length}>{f}</button>
@@ -280,7 +309,41 @@ export default function Candidates() {
         </div>
       )}
 
-      {!match && picked.size > 0 && (
+      {aiOpen && aiOn && (
+        <div className="match-panel ai-panel">
+          <div className="ai-search-row">
+            <span className="ai-spark" aria-hidden>✦</span>
+            <input
+              className="search ai-search-input"
+              placeholder="Describe who you're looking for — e.g. “senior backend engineers who've shipped payments and can mentor juniors”"
+              value={aiQuery}
+              onChange={(e) => setAiQuery(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') runAiSearch(); }}
+              aria-label="natural-language candidate search"
+            />
+            <button className="run" onClick={runAiSearch} disabled={busy || !aiQuery.trim()}>{busy ? 'searching…' : 'Search'}</button>
+            {aiSearch && <button className="linklike" onClick={() => { setAiSearch(null); setAiQuery(''); }}>clear</button>}
+          </div>
+          {aiSearch && (
+            <div className="ai-parsed">
+              <span className={`ai-badge ${aiSearch.mode}`}>
+                {aiSearch.mode === 'live' ? `AI · ${aiSearch.model || ''}` : aiSearch.mode === 'mock' ? 'local draft · no AI key' : 'local fallback'}
+              </span>
+              <span className="ai-read">read as:</span>
+              {aiSearch.parsed.skills.length > 0 && <span> skills <b>{aiSearch.parsed.skills.join(', ')}</b></span>}
+              {aiSearch.parsed.minYears != null && <span> · <b>{aiSearch.parsed.minYears}+ yrs</b></span>}
+              {aiSearch.parsed.roleWords.length > 0 && <span> · role <b>{aiSearch.parsed.roleWords.join(', ')}</b></span>}
+              {aiSearch.parsed.location && <span> · in <b>{aiSearch.parsed.location}</b></span>}
+              {aiSearch.parsed.keywords.length > 0 && <span> · terms <b>{aiSearch.parsed.keywords.join(', ')}</b></span>}
+              {aiSearch.parsed.skills.length === 0 && aiSearch.parsed.roleWords.length === 0 &&
+                aiSearch.parsed.keywords.length === 0 && aiSearch.parsed.minYears == null && <span> (no filters found — try naming skills or a role)</span>}
+            </div>
+          )}
+          <p className="ai-note">Ranking is deterministic and explained per candidate — the AI only turns your words into a filter.</p>
+        </div>
+      )}
+
+      {!match && !aiSearch && picked.size > 0 && (
         <div className="bulk-bar">
           <span className="bulk-count">{picked.size} selected</span>
           <span className="bulk-actions">
@@ -305,6 +368,8 @@ export default function Candidates() {
             <div className="empty-state">
               {match ? (
                 'No candidates matched — try a broader job description.'
+              ) : aiSearch ? (
+                'No candidates matched your search — try different words.'
               ) : (
                 <>
                   No candidates yet — upload files above, or
@@ -316,6 +381,18 @@ export default function Candidates() {
                 </>
               )}
             </div>
+          ) : aiSearch ? (
+            aiSearch.results.map((r) => (
+              <button
+                key={r.candidate_id}
+                className={`db-row ${selected === r.candidate_id ? 'active' : ''}`}
+                onClick={() => setSelected(selected === r.candidate_id ? null : r.candidate_id)}
+              >
+                <span className="db-name">{r.full_name || '(unnamed)'}</span>
+                <span className="db-sub">{r.why.slice(0, 2).join(' · ') || r.headline || '—'}</span>
+                <span className="db-conf" style={{ color: confColor(r.relevance) }}>{r.relevance.toFixed(2)}</span>
+              </button>
+            ))
           ) : match ? (
             match.results.map((r) => (
               <button
@@ -359,6 +436,8 @@ export default function Candidates() {
             stages={stages}
             matchResult={match ? match.results.find((r) => r.candidate_id === selected) : null}
             blind={!!(match && match.blind)}
+            aiMode={aiInfo ? aiInfo.mode : 'off'}
+            jobText={matchOpen && jd.trim() ? jd : null}
             onChanged={load}
             onDeleted={() => { setSelected(null); load(); }}
           />
@@ -430,7 +509,7 @@ const EDITABLE = {
 
 const IDENTITY_FIELDS = ['full_name', 'emails', 'phones', 'location'];
 
-function Detail({ id, stages, matchResult, blind, onChanged, onDeleted }) {
+function Detail({ id, stages, matchResult, blind, aiMode, jobText, onChanged, onDeleted }) {
   const toast = useToast();
   const [candidate, setCandidate] = useState(null);
   const [suggestions, setSuggestions] = useState(null);
@@ -538,6 +617,8 @@ function Detail({ id, stages, matchResult, blind, onChanged, onDeleted }) {
       {suggestions && (
         <AtsPanel score={r.overall_confidence} suggestions={suggestions} record={r} open={showSuggestions} onToggle={() => setShowSuggestions((s) => !s)} onSave={save} />
       )}
+
+      {!hideIdentity && aiMode && aiMode !== 'off' && <AiAssist id={id} jobText={jobText} aiMode={aiMode} />}
 
       <div className="fields">
         {Object.keys(EDITABLE)
@@ -676,6 +757,123 @@ function Detail({ id, stages, matchResult, blind, onChanged, onDeleted }) {
         <button className="linklike danger" onClick={remove}>delete candidate</button>
       </div>
     </article>
+  );
+}
+
+// AI-written drafts for one candidate — a grounded brief, tailored
+// interview questions, or a first-contact note. Every result is labeled by mode
+// (live model, or a deterministic local draft) and is never written back into
+// the record: these are drafts a recruiter reads and verifies.
+function AiAssist({ id, jobText, aiMode }) {
+  const toast = useToast();
+  const [tab, setTab] = useState(null); // 'summary' | 'kit' | 'outreach'
+  const [data, setData] = useState({}); // cached result per tab
+  const [busy, setBusy] = useState(null);
+
+  useEffect(() => { setTab(null); setData({}); setBusy(null); }, [id]);
+
+  async function run(kind) {
+    setTab(kind);
+    if (data[kind]) return; // already generated — just show it
+    setBusy(kind);
+    try {
+      const path = kind === 'summary' ? 'summary' : kind === 'kit' ? 'interview-kit' : 'outreach';
+      const body = kind === 'summary' ? {} : (jobText ? { jd: jobText } : {});
+      const res = await api(`/api/candidates/${id}/${path}`, { method: 'POST', body });
+      setData((d) => ({ ...d, [kind]: res }));
+    } catch (err) {
+      toast(err.message, 'bad');
+      setTab(null);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  const active = tab ? data[tab] : null;
+
+  return (
+    <div className="ai-assist">
+      <div className="ai-assist-head">
+        <span className="ai-spark" aria-hidden>✦</span>
+        <span className="ai-assist-title">AI assist</span>
+        {aiMode !== 'live' && <span className="ai-ctx dim">local drafts</span>}
+        {jobText && <span className="ai-ctx" title="the job description open in the match panel is used as context">JD context</span>}
+      </div>
+      <div className="ai-actions">
+        <button className={`ghost sm ${tab === 'summary' ? 'on' : ''}`} onClick={() => run('summary')} disabled={busy === 'summary'}>{busy === 'summary' ? 'writing…' : 'Summarize'}</button>
+        <button className={`ghost sm ${tab === 'kit' ? 'on' : ''}`} onClick={() => run('kit')} disabled={busy === 'kit'}>{busy === 'kit' ? 'writing…' : 'Interview kit'}</button>
+        <button className={`ghost sm ${tab === 'outreach' ? 'on' : ''}`} onClick={() => run('outreach')} disabled={busy === 'outreach'}>{busy === 'outreach' ? 'writing…' : 'Outreach draft'}</button>
+      </div>
+
+      {active && (
+        <div className="ai-out">
+          <AiModeNote result={active} />
+          {tab === 'summary' && <AiSummary d={active} />}
+          {tab === 'kit' && <AiKit d={active} />}
+          {tab === 'outreach' && <AiOutreach d={active} toast={toast} />}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AiModeNote({ result }) {
+  const label = result.mode === 'live' ? `AI${result.model ? ` · ${result.model}` : ''}`
+    : result.mode === 'mock' ? 'Local draft · no AI key configured'
+    : 'Local draft · AI unavailable';
+  return (
+    <div className="ai-mode-note">
+      <span className={`ai-badge ${result.mode}`}>{label}</span>
+      <span className="ai-verify">AI-written draft — verify before use; nothing here changes the record.</span>
+      {result.ai_error && <span className="ai-err" title={result.ai_error}>· fell back locally</span>}
+    </div>
+  );
+}
+
+function AiSummary({ d }) {
+  return (
+    <div>
+      <p className="ai-summary">{d.summary}</p>
+      {d.strengths && d.strengths.length > 0 && (
+        <div className="ai-block">
+          <div className="ai-sub">Strengths</div>
+          <ul className="ai-list">{d.strengths.map((s, i) => <li key={i}>{s}</li>)}</ul>
+        </div>
+      )}
+      {d.gaps && d.gaps.length > 0 && (
+        <div className="ai-block">
+          <div className="ai-sub">Probe / gaps</div>
+          <ul className="ai-list">{d.gaps.map((s, i) => <li key={i}>{s}</li>)}</ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function AiKit({ d }) {
+  return (
+    <div>
+      {(d.groups || []).map((g, i) => (
+        <div className="ai-block" key={i}>
+          <div className="ai-sub">{g.area}</div>
+          <ol className="ai-qlist">{g.questions.map((q, j) => <li key={j}>{q}</li>)}</ol>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function AiOutreach({ d, toast }) {
+  function copy() {
+    const text = `Subject: ${d.subject || ''}\n\n${d.body || ''}`;
+    navigator.clipboard?.writeText(text).then(() => toast('Copied to clipboard')).catch(() => {});
+  }
+  return (
+    <div>
+      {d.subject && <div className="ai-subject"><b>Subject:</b> {d.subject}</div>}
+      <textarea className="ai-outreach" rows={7} readOnly value={d.body || ''} />
+      <div><button className="ghost sm" onClick={copy}>copy</button></div>
+    </div>
   );
 }
 

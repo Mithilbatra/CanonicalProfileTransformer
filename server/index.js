@@ -14,6 +14,8 @@ const { suggestImprovements } = require('./engine/suggest');
 const { insights } = require('./analytics');
 const { rateLimit } = require('./lib/ratelimit');
 const mailer = require('./lib/mailer');
+const llm = require('./lib/llm');
+const ai = require('./ai');
 const auth = require('./auth');
 const store = require('./store');
 const audit = require('./audit');
@@ -22,6 +24,17 @@ const audit = require('./audit');
 const canWrite = auth.requireRole('admin', 'recruiter');
 // throttle credential endpoints against stuffing / signup spam
 const authLimiter = rateLimit({ windowMs: 60_000, max: 20 });
+// throttle the AI endpoints — they call an external model and cost real money
+const aiLimiter = rateLimit({ windowMs: 60_000, max: 40 });
+
+// Guard for AI routes: when nothing is configured, report a clear 503 rather
+// than pretending. (In dev / with AI_MOCK the layer runs deterministic drafts.)
+function aiEnabled(_req, res, next) {
+  if (llm.mode() === 'off') {
+    return res.status(503).json({ error: 'AI features are not configured. Set ANTHROPIC_API_KEY to enable them.' });
+  }
+  next();
+}
 
 const ROOT = path.join(__dirname, '..');
 const SAMPLES = path.join(ROOT, 'samples');
@@ -390,6 +403,84 @@ app.get('/api/candidates/:id/suggestions', auth.requireAuth, (req, res) => {
   if (!candidate) return res.status(404).json({ error: 'candidate not found' });
   res.json({ suggestions: suggestImprovements(candidate.record, candidate.field_confidence) });
 });
+
+// ---- AI layer ---------------------------------------------------------
+//
+// Additive, attributed AI assists. They never mutate the canonical record —
+// each response carries its mode (live | mock | fallback) so the UI can label
+// it as a draft to verify. Reads only, so viewers may use them too.
+
+app.get('/api/ai/status', auth.requireAuth, (req, res) => {
+  res.json({ mode: llm.mode(), model: llm.MODEL, features: ai.FEATURES });
+});
+
+// Natural-language candidate search: the model parses the query into a structured
+// filter; the deterministic engine ranks. The parsed filter is returned too, so
+// the recruiter can see exactly what was searched for.
+app.post('/api/ai/search', auth.requireAuth, aiEnabled, aiLimiter, async (req, res) => {
+  try {
+    const { query, limit } = req.body || {};
+    const cap = Math.min(50, Math.max(1, parseInt(limit, 10) || 20));
+    const result = await ai.search(query, store.listCandidates(req.user.org_id), { limit: cap });
+    audit.record(req.user.org_id, req.user.email, 'ai.search', null, { mode: result.mode, results: result.count });
+    res.json(result);
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+// A grounded recruiter brief (summary + strengths + gaps) for one candidate.
+app.post('/api/candidates/:id/summary', auth.requireAuth, aiEnabled, aiLimiter, async (req, res) => {
+  const candidate = store.getCandidate(req.user.org_id, req.params.id);
+  if (!candidate) return res.status(404).json({ error: 'candidate not found' });
+  try {
+    const result = await ai.summarize(candidate.record);
+    audit.record(req.user.org_id, req.user.email, 'ai.summary', req.params.id, { mode: result.mode });
+    res.json(result);
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+// Tailored screening questions, optionally focused by a job's description.
+app.post('/api/candidates/:id/interview-kit', auth.requireAuth, aiEnabled, aiLimiter, async (req, res) => {
+  const candidate = store.getCandidate(req.user.org_id, req.params.id);
+  if (!candidate) return res.status(404).json({ error: 'candidate not found' });
+  try {
+    const jobText = jobContext(req.user.org_id, req.body).description;
+    const result = await ai.interviewKit(candidate.record, { jobText });
+    audit.record(req.user.org_id, req.user.email, 'ai.interview_kit', req.params.id, { mode: result.mode });
+    res.json(result);
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+// A personalized first-contact outreach draft, optionally for a specific job.
+app.post('/api/candidates/:id/outreach', auth.requireAuth, aiEnabled, aiLimiter, async (req, res) => {
+  const candidate = store.getCandidate(req.user.org_id, req.params.id);
+  if (!candidate) return res.status(404).json({ error: 'candidate not found' });
+  try {
+    const job = jobContext(req.user.org_id, req.body);
+    const result = await ai.outreach(candidate.record, { jobText: job.description, jobTitle: job.title, tone: (req.body || {}).tone });
+    audit.record(req.user.org_id, req.user.email, 'ai.outreach', req.params.id, { mode: result.mode });
+    res.json(result);
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+// Resolve optional role context for an AI assist from the request body: a saved
+// job (by id) wins; otherwise raw jd text is accepted. Both are optional.
+function jobContext(orgId, body) {
+  const b = body || {};
+  if (b.jobId != null) {
+    const job = store.getJob(orgId, b.jobId);
+    if (job) return { title: job.title, description: job.description };
+  }
+  if (b.jd && String(b.jd).trim()) return { title: null, description: String(b.jd) };
+  return { title: null, description: null };
+}
 
 // Screening analytics: funnel, confidence distribution, skill supply, sources.
 app.get('/api/insights', auth.requireAuth, (req, res) => {
