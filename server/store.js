@@ -31,6 +31,58 @@ const OVERRIDABLE = {
 const STAGES = ['new', 'screening', 'interview', 'offer', 'hired', 'rejected'];
 const DEFAULT_META = { stage: 'new', tags: [], note: null };
 
+// ---- derived search index -------------------------------------------------
+// candidate_index / candidate_skills mirror the candidates table so the list
+// can filter and paginate in SQL. They are written by indexCandidate() from
+// inside remerge/rebuild and torn down alongside the candidate they describe.
+
+const _insertIndex = db.prepare(
+  'INSERT OR REPLACE INTO candidate_index (org_id, candidate_id, sort_name, search_text, overall_confidence) VALUES (?, ?, ?, ?, ?)'
+);
+const _delIndex = db.prepare('DELETE FROM candidate_index WHERE org_id = ? AND candidate_id = ?');
+const _insertSkill = db.prepare('INSERT INTO candidate_skills (org_id, candidate_id, skill) VALUES (?, ?, ?)');
+const _delSkills = db.prepare('DELETE FROM candidate_skills WHERE org_id = ? AND candidate_id = ?');
+
+function sortName(record) {
+  return (record.full_name || '').trim().toLowerCase() || null;
+}
+
+// A lowercased text blob covering everything the list search should match.
+function searchText(record) {
+  const parts = [
+    record.full_name,
+    ...(record.emails || []),
+    record.headline,
+    ...(record.experience || []).flatMap((e) => [e.company, e.title]),
+    ...(record.skills || []).map((s) => s.name),
+    ...(record.projects || []).map((p) => p.name),
+    record.location ? `${record.location.city || ''} ${record.location.country || ''}` : '',
+  ];
+  return parts.filter(Boolean).join(' ').toLowerCase();
+}
+
+// (Re)write the index + skill rows for one candidate. Called for every record
+// written by remerge, inside its transaction.
+function indexCandidate(orgId, record) {
+  const id = record.candidate_id;
+  _delSkills.run(orgId, id);
+  _insertIndex.run(orgId, id, sortName(record), searchText(record), record.overall_confidence);
+  const seen = new Set();
+  for (const s of record.skills || []) {
+    const nm = String(s.name || '').trim().toLowerCase();
+    if (nm && !seen.has(nm)) { seen.add(nm); _insertSkill.run(orgId, id, nm); }
+  }
+}
+
+function unindexCandidate(orgId, candidateId) {
+  _delIndex.run(orgId, candidateId);
+  _delSkills.run(orgId, candidateId);
+}
+
+function escapeLike(s) {
+  return String(s).toLowerCase().replace(/[\\%_]/g, (m) => '\\' + m);
+}
+
 function ingestSources(orgId, sourceResults) {
   const insertSubject = db.prepare('INSERT INTO subjects (org_id, source_id, source_type, subject) VALUES (?, ?, ?, ?)');
   const insertKey = db.prepare('INSERT INTO subject_keys (org_id, subject_id, key) VALUES (?, ?, ?)');
@@ -100,7 +152,7 @@ function remerge(orgId, subjectIds) {
 
   db.transaction(() => {
     const del = db.prepare('DELETE FROM candidates WHERE org_id = ? AND candidate_id = ?');
-    for (const id of staleCandidates) del.run(orgId, id);
+    for (const id of staleCandidates) { del.run(orgId, id); unindexCandidate(orgId, id); }
     const insert = db.prepare(
       'INSERT OR REPLACE INTO candidates (org_id, candidate_id, record, field_confidence, subject_ids) VALUES (?, ?, ?, ?, ?)'
     );
@@ -115,6 +167,7 @@ function remerge(orgId, subjectIds) {
         JSON.stringify(fieldConf),
         JSON.stringify(cluster.map((s) => s._dbId))
       );
+      indexCandidate(orgId, record); // keep the search index in lockstep
     }
   })();
 }
@@ -129,6 +182,8 @@ function rebuild(orgId) {
       for (const key of subjectKeys(JSON.parse(r.subject))) insertKey.run(orgId, r.id, key);
     }
     db.prepare('DELETE FROM candidates WHERE org_id = ?').run(orgId);
+    db.prepare('DELETE FROM candidate_index WHERE org_id = ?').run(orgId);
+    db.prepare('DELETE FROM candidate_skills WHERE org_id = ?').run(orgId);
   })();
   remerge(orgId, rows.map((r) => r.id));
   return countCandidates(orgId);
@@ -146,7 +201,10 @@ function ensureConsistent() {
   const subjects = db.prepare('SELECT COUNT(*) AS n FROM subjects').get().n;
   const keys = db.prepare('SELECT COUNT(*) AS n FROM subject_keys').get().n;
   const candidates = db.prepare('SELECT COUNT(*) AS n FROM candidates').get().n;
-  if (subjects > 0 && (keys === 0 || candidates === 0)) rebuildAll();
+  const indexed = db.prepare('SELECT COUNT(*) AS n FROM candidate_index').get().n;
+  // Rebuild if a derived table is missing/empty — covers fresh migrations and
+  // databases that predate the search index (candidates present, index empty).
+  if (subjects > 0 && (keys === 0 || candidates === 0 || indexed === 0)) rebuildAll();
 }
 
 // Overlay manual corrections on a freshly merged record. An override always
@@ -168,37 +226,46 @@ function applyOverrides(orgId, record, fieldConf) {
   if (rows.length) record.overall_confidence = overallConfidence(record, fieldConf);
 }
 
-function listCandidates(orgId, { q, skill, stage, tag } = {}) {
-  const rows = db
-    .prepare('SELECT candidate_id, record, field_confidence, updated_at FROM candidates WHERE org_id = ?')
-    .all(orgId);
-  const metaMap = metaForOrg(orgId);
-  let items = rows.map((r) => ({ ...rowToCandidate(r), meta: metaMap.get(r.candidate_id) || { ...DEFAULT_META } }));
-
-  if (q) {
-    const needle = String(q).toLowerCase();
-    items = items.filter((c) => {
-      const r = c.record;
-      return (
-        (r.full_name || '').toLowerCase().includes(needle) ||
-        r.emails.some((e) => e.includes(needle)) ||
-        (r.headline || '').toLowerCase().includes(needle) ||
-        r.experience.some((e) => (e.company || '').toLowerCase().includes(needle))
-      );
-    });
-  }
+// SQL-backed candidate query with optional pagination. Filters (text search,
+// exact skill, stage, tag) run against the derived indexes so this stays fast
+// as the pool grows. Returns { items, total } — `total` is the count matching
+// the filters, independent of limit/offset, so the UI can page.
+function queryCandidates(orgId, { q, skill, stage, tag, limit = null, offset = 0 } = {}) {
+  const where = ['c.org_id = ?'];
+  const params = [orgId];
+  if (q) { where.push("ci.search_text LIKE ? ESCAPE '\\'"); params.push(`%${escapeLike(q)}%`); }
   if (skill) {
-    const needle = String(skill).toLowerCase();
-    items = items.filter((c) => c.record.skills.some((s) => s.name.toLowerCase() === needle));
+    where.push('EXISTS (SELECT 1 FROM candidate_skills cs WHERE cs.org_id = c.org_id AND cs.candidate_id = c.candidate_id AND cs.skill = ?)');
+    params.push(String(skill).toLowerCase());
   }
-  if (stage) items = items.filter((c) => c.meta.stage === stage);
+  if (stage) { where.push("COALESCE(cm.stage, 'new') = ?"); params.push(String(stage)); }
   if (tag) {
-    const needle = String(tag).toLowerCase();
-    items = items.filter((c) => c.meta.tags.some((t) => t.toLowerCase() === needle));
+    where.push("EXISTS (SELECT 1 FROM json_each(COALESCE(cm.tags, '[]')) je WHERE lower(je.value) = ?)");
+    params.push(String(tag).toLowerCase());
   }
 
-  items.sort((a, b) => (a.record.full_name || '~').localeCompare(b.record.full_name || '~'));
-  return items;
+  const from =
+    `FROM candidates c
+     LEFT JOIN candidate_index ci ON ci.org_id = c.org_id AND ci.candidate_id = c.candidate_id
+     LEFT JOIN candidate_meta cm ON cm.org_id = c.org_id AND cm.candidate_id = c.candidate_id
+     WHERE ${where.join(' AND ')}`;
+
+  const total = db.prepare(`SELECT COUNT(*) AS n ${from}`).get(...params).n;
+
+  let sql = `SELECT c.candidate_id, c.record, c.field_confidence, c.updated_at ${from} ORDER BY COALESCE(ci.sort_name, '~'), c.candidate_id`;
+  const qp = [...params];
+  if (limit != null) { sql += ' LIMIT ? OFFSET ?'; qp.push(limit, offset); }
+
+  const rows = db.prepare(sql).all(...qp);
+  const metaMap = metaForOrg(orgId);
+  const items = rows.map((r) => ({ ...rowToCandidate(r), meta: metaMap.get(r.candidate_id) || { ...DEFAULT_META } }));
+  return { items, total, limit, offset };
+}
+
+// Backward-compatible array form: the full filtered list (no pagination), used
+// by JD matching, AI search and exports, which all rank/emit the whole pool.
+function listCandidates(orgId, filters = {}) {
+  return queryCandidates(orgId, { ...filters, limit: null, offset: 0 }).items;
 }
 
 function getCandidate(orgId, candidateId) {
@@ -323,6 +390,7 @@ function deleteCandidate(orgId, candidateId) {
     db.prepare('DELETE FROM candidate_meta WHERE org_id = ? AND candidate_id = ?').run(orgId, candidateId);
     db.prepare('DELETE FROM job_candidates WHERE org_id = ? AND candidate_id = ?').run(orgId, candidateId);
     db.prepare('DELETE FROM candidates WHERE org_id = ? AND candidate_id = ?').run(orgId, candidateId);
+    unindexCandidate(orgId, candidateId);
   })();
 }
 
@@ -507,6 +575,105 @@ function importOrg(orgId, data) {
   return { subjects: data.subjects.length, candidates: countCandidates(orgId) };
 }
 
+// ---- org settings: data retention + AI budget --------------------------
+
+function aiDefaultCap() {
+  const n = parseInt(process.env.AI_DAILY_CAP, 10);
+  return Number.isFinite(n) && n >= 0 ? n : 200;
+}
+
+function getOrgSettings(orgId) {
+  const row = db.prepare('SELECT retention_days, ai_daily_cap FROM org_settings WHERE org_id = ?').get(orgId);
+  const retention_days = row && row.retention_days != null ? row.retention_days : null;
+  const ai_daily_cap = row && row.ai_daily_cap != null ? row.ai_daily_cap : null;
+  return { retention_days, ai_daily_cap, ai_effective_cap: ai_daily_cap != null ? ai_daily_cap : aiDefaultCap() };
+}
+
+// Patch retention_days and/or ai_daily_cap. A null/empty value clears the
+// setting (retention: keep forever; cap: use the env default).
+function setOrgSettings(orgId, patch = {}) {
+  const cur = getOrgSettings(orgId);
+  let retention = cur.retention_days;
+  let cap = cur.ai_daily_cap;
+
+  if ('retention_days' in patch) {
+    const v = patch.retention_days;
+    if (v == null || v === '') retention = null;
+    else {
+      const n = parseInt(v, 10);
+      if (!Number.isInteger(n) || n < 1 || n > 3650) throw httpError(400, 'retention_days must be 1–3650, or empty to keep data forever');
+      retention = n;
+    }
+  }
+  if ('ai_daily_cap' in patch) {
+    const v = patch.ai_daily_cap;
+    if (v == null || v === '') cap = null;
+    else {
+      const n = parseInt(v, 10);
+      if (!Number.isInteger(n) || n < 0 || n > 100000) throw httpError(400, 'ai_daily_cap must be a non-negative number, or empty for the default');
+      cap = n;
+    }
+  }
+
+  db.prepare(
+    `INSERT INTO org_settings (org_id, retention_days, ai_daily_cap) VALUES (?, ?, ?)
+     ON CONFLICT(org_id) DO UPDATE SET retention_days = excluded.retention_days,
+       ai_daily_cap = excluded.ai_daily_cap, updated_at = datetime('now')`
+  ).run(orgId, retention, cap);
+  return getOrgSettings(orgId);
+}
+
+function utcDay() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+// Count one live AI call against today's per-org budget.
+function recordAiUsage(orgId, feature) {
+  db.prepare(
+    `INSERT INTO ai_usage (org_id, day, feature, count) VALUES (?, ?, ?, 1)
+     ON CONFLICT(org_id, day, feature) DO UPDATE SET count = count + 1`
+  ).run(orgId, utcDay(), String(feature || 'ai'));
+}
+
+// Today's AI budget for an org: how many live calls used, the cap, and whether
+// it's exceeded. Only live (billable) calls are counted by the routes.
+function aiBudget(orgId) {
+  const cap = getOrgSettings(orgId).ai_effective_cap;
+  const used = db.prepare('SELECT COALESCE(SUM(count), 0) AS n FROM ai_usage WHERE org_id = ? AND day = ?').get(orgId, utcDay()).n;
+  return { used, cap, remaining: Math.max(0, cap - used), exceeded: used >= cap };
+}
+
+// ---- data retention: purge candidates past the org's retention window ----
+
+// Delete candidates whose most recent source data is older than retention_days.
+// A candidate with no dated subjects is left alone. Returns the count purged.
+function purgeExpired(orgId) {
+  const { retention_days } = getOrgSettings(orgId);
+  if (!retention_days) return { purged: 0 };
+  // Compute the cutoff in SQLite's own datetime format so string comparison
+  // against subjects.created_at is valid.
+  const cutoff = db.prepare("SELECT datetime('now', ?) AS c").get(`-${retention_days} days`).c;
+
+  const rows = db.prepare('SELECT candidate_id, subject_ids FROM candidates WHERE org_id = ?').all(orgId);
+  const expired = [];
+  for (const row of rows) {
+    const ids = JSON.parse(row.subject_ids);
+    if (!ids.length) continue;
+    const marks = ids.map(() => '?').join(',');
+    const newest = db.prepare(`SELECT MAX(created_at) AS m FROM subjects WHERE org_id = ? AND id IN (${marks})`).get(orgId, ...ids).m;
+    if (newest && newest < cutoff) expired.push(row.candidate_id);
+  }
+  for (const id of expired) { try { deleteCandidate(orgId, id); } catch { /* already gone */ } }
+  return { purged: expired.length };
+}
+
+// Sweep every org (used by a periodic job at startup).
+function purgeAllOrgs() {
+  let purged = 0;
+  for (const { id } of db.prepare('SELECT id FROM orgs').all()) purged += purgeExpired(id).purged;
+  return { purged };
+}
+
 function countCandidates(orgId) {
   return db.prepare('SELECT COUNT(*) AS n FROM candidates WHERE org_id = ?').get(orgId).n;
 }
@@ -533,7 +700,14 @@ module.exports = {
   rebuild,
   rebuildAll,
   listCandidates,
+  queryCandidates,
   getCandidate,
+  getOrgSettings,
+  setOrgSettings,
+  recordAiUsage,
+  aiBudget,
+  purgeExpired,
+  purgeAllOrgs,
   setOverride,
   clearOverride,
   deleteCandidate,

@@ -14,6 +14,7 @@ const { suggestImprovements } = require('./engine/suggest');
 const { insights } = require('./analytics');
 const { rateLimit } = require('./lib/ratelimit');
 const mailer = require('./lib/mailer');
+const logger = require('./lib/logger');
 const llm = require('./lib/llm');
 const ai = require('./ai');
 const auth = require('./auth');
@@ -34,6 +35,27 @@ function aiEnabled(_req, res, next) {
     return res.status(503).json({ error: 'AI features are not configured. Set ANTHROPIC_API_KEY to enable them.' });
   }
   next();
+}
+
+// Enforce the per-org daily AI budget. Only live (billable) calls are metered
+// — mock/local drafts cost nothing, so they're never capped.
+function aiBudgetGuard(req, res, next) {
+  if (llm.mode() === 'live') {
+    const budget = store.aiBudget(req.user.org_id);
+    if (budget.exceeded) {
+      return res.status(429).json({
+        error: `daily AI limit reached (${budget.cap} requests/day). It resets tomorrow; an admin can raise it in settings.`,
+        budget,
+      });
+    }
+  }
+  next();
+}
+
+// Count a completed AI response against the org's budget when it actually hit
+// the model (mode 'live'); fallbacks and mock drafts aren't billable.
+function meterAi(req, feature, result) {
+  if (result && result.mode === 'live') store.recordAiUsage(req.user.org_id, feature);
 }
 
 const ROOT = path.join(__dirname, '..');
@@ -70,10 +92,40 @@ app.use(
 app.use(cors());
 app.use(express.json({ limit: '5mb' }));
 
+// One structured log line per request (method, path, status, duration, org).
+// Health checks are skipped to keep the log readable.
+app.use((req, res, next) => {
+  if (req.path === '/api/health') return next();
+  const start = Date.now();
+  res.on('finish', () => {
+    logger.info('request', {
+      method: req.method,
+      path: req.path,
+      status: res.statusCode,
+      ms: Date.now() - start,
+      org: req.user ? req.user.org_id : undefined,
+    });
+  });
+  next();
+});
+
+const MAX_UPLOAD_MB = Number(process.env.MAX_UPLOAD_MB || 8);
+const MAX_UPLOAD_FILES = Number(process.env.MAX_UPLOAD_FILES || 20);
+const EXTRACT_TIMEOUT_MS = Number(process.env.EXTRACT_TIMEOUT_MS || 45000);
+
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { files: 20, fileSize: 8 * 1024 * 1024 },
+  limits: { files: MAX_UPLOAD_FILES, fileSize: MAX_UPLOAD_MB * 1024 * 1024 },
 });
+
+// Bound a slow extraction so one pathological file can't wedge the request.
+// The underlying work isn't hard-killed (that needs a worker), but the request
+// is freed and the file is reported as failed rather than hanging.
+function withTimeout(promise, ms, message) {
+  let t;
+  const timeout = new Promise((_, reject) => { t = setTimeout(() => reject(new Error(message)), ms); });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(t));
+}
 
 function readIf(p) {
   try { return fs.readFileSync(p, 'utf8'); } catch { return null; }
@@ -213,6 +265,28 @@ app.post('/api/org/restore', auth.requireAuth, auth.requireRole('admin'), (req, 
   }
 });
 
+// Org settings: data-retention window + AI daily-cost cap (admin only).
+app.get('/api/org/settings', auth.requireAuth, auth.requireRole('admin'), (req, res) => {
+  res.json(store.getOrgSettings(req.user.org_id));
+});
+
+app.put('/api/org/settings', auth.requireAuth, auth.requireRole('admin'), (req, res) => {
+  try {
+    const result = store.setOrgSettings(req.user.org_id, req.body || {});
+    audit.record(req.user.org_id, req.user.email, 'org.settings', null, result);
+    res.json(result);
+  } catch (err) {
+    res.status(err.status || 500).json({ error: err.message });
+  }
+});
+
+// Run the retention purge now (in addition to the daily sweep) — admin only.
+app.post('/api/org/purge', auth.requireAuth, auth.requireRole('admin'), (req, res) => {
+  const result = store.purgeExpired(req.user.org_id);
+  audit.record(req.user.org_id, req.user.email, 'org.purge', null, result);
+  res.json(result);
+});
+
 // ---- stateless playground (no auth, nothing stored) ------------------
 
 app.get('/api/samples', (_req, res) => {
@@ -258,18 +332,29 @@ app.post('/api/upload', auth.requireAuth, canWrite, upload.array('files'), async
     if (!req.files || !req.files.length) {
       return res.status(400).json({ error: 'no files uploaded (multipart field name: "files")' });
     }
+    // Convert each file to text under a timeout. A file that fails (corrupt,
+    // scanned PDF, too large to OCR, or too slow) is reported and skipped
+    // rather than failing the whole upload.
     const sources = [];
+    const failed = [];
     for (const f of req.files) {
-      const { text, links } = await bufferToText(f.buffer, f.originalname);
-      sources.push({ name: f.originalname, content: text, links });
+      try {
+        const { text, links } = await withTimeout(
+          bufferToText(f.buffer, f.originalname), EXTRACT_TIMEOUT_MS, `extracting "${f.originalname}" timed out`
+        );
+        sources.push({ name: f.originalname, content: text, links });
+      } catch (err) {
+        failed.push({ source: f.originalname, type: 'file', ok: false, error: err.message, subjects: 0 });
+      }
     }
     const allowNetwork = req.body.allowNetwork === 'true';
     const { sourceResults, sourceReport } = await extractSources(sources, { allowNetwork });
     const { subjectsAdded, totalCandidates } = store.ingestSources(req.user.org_id, sourceResults);
+    const report = [...sourceReport, ...failed];
     audit.record(req.user.org_id, req.user.email, 'candidates.upload', null, {
-      files: sourceReport.map((s) => s.source), subjectsAdded, totalCandidates,
+      files: report.map((s) => s.source), subjectsAdded, totalCandidates,
     });
-    res.json({ sources: sourceReport, subjectsAdded, totalCandidates });
+    res.json({ sources: report, subjectsAdded, totalCandidates });
   } catch (err) {
     res.status(err.status || 500).json({ error: err.message });
   }
@@ -294,7 +379,10 @@ app.post('/api/demo/seed', auth.requireAuth, canWrite, async (req, res) => {
 
 app.get('/api/candidates', auth.requireAuth, (req, res) => {
   const { q, skill, stage, tag } = req.query;
-  res.json({ candidates: store.listCandidates(req.user.org_id, { q, skill, stage, tag }), stages: store.STAGES });
+  const limit = Math.min(200, Math.max(1, parseInt(req.query.limit, 10) || 50));
+  const offset = Math.max(0, parseInt(req.query.offset, 10) || 0);
+  const { items, total } = store.queryCandidates(req.user.org_id, { q, skill, stage, tag, limit, offset });
+  res.json({ candidates: items, total, limit, offset, stages: store.STAGES });
 });
 
 // Bulk actions across a set of candidate ids. Declared before the :id routes.
@@ -411,17 +499,18 @@ app.get('/api/candidates/:id/suggestions', auth.requireAuth, (req, res) => {
 // it as a draft to verify. Reads only, so viewers may use them too.
 
 app.get('/api/ai/status', auth.requireAuth, (req, res) => {
-  res.json({ mode: llm.mode(), model: llm.MODEL, features: ai.FEATURES });
+  res.json({ mode: llm.mode(), model: llm.MODEL, features: ai.FEATURES, budget: store.aiBudget(req.user.org_id) });
 });
 
 // Natural-language candidate search: the model parses the query into a structured
 // filter; the deterministic engine ranks. The parsed filter is returned too, so
 // the recruiter can see exactly what was searched for.
-app.post('/api/ai/search', auth.requireAuth, aiEnabled, aiLimiter, async (req, res) => {
+app.post('/api/ai/search', auth.requireAuth, aiEnabled, aiBudgetGuard, aiLimiter, async (req, res) => {
   try {
     const { query, limit } = req.body || {};
     const cap = Math.min(50, Math.max(1, parseInt(limit, 10) || 20));
     const result = await ai.search(query, store.listCandidates(req.user.org_id), { limit: cap });
+    meterAi(req, 'search', result);
     audit.record(req.user.org_id, req.user.email, 'ai.search', null, { mode: result.mode, results: result.count });
     res.json(result);
   } catch (err) {
@@ -430,11 +519,12 @@ app.post('/api/ai/search', auth.requireAuth, aiEnabled, aiLimiter, async (req, r
 });
 
 // A grounded recruiter brief (summary + strengths + gaps) for one candidate.
-app.post('/api/candidates/:id/summary', auth.requireAuth, aiEnabled, aiLimiter, async (req, res) => {
+app.post('/api/candidates/:id/summary', auth.requireAuth, aiEnabled, aiBudgetGuard, aiLimiter, async (req, res) => {
   const candidate = store.getCandidate(req.user.org_id, req.params.id);
   if (!candidate) return res.status(404).json({ error: 'candidate not found' });
   try {
     const result = await ai.summarize(candidate.record);
+    meterAi(req, 'summary', result);
     audit.record(req.user.org_id, req.user.email, 'ai.summary', req.params.id, { mode: result.mode });
     res.json(result);
   } catch (err) {
@@ -443,12 +533,13 @@ app.post('/api/candidates/:id/summary', auth.requireAuth, aiEnabled, aiLimiter, 
 });
 
 // Tailored screening questions, optionally focused by a job's description.
-app.post('/api/candidates/:id/interview-kit', auth.requireAuth, aiEnabled, aiLimiter, async (req, res) => {
+app.post('/api/candidates/:id/interview-kit', auth.requireAuth, aiEnabled, aiBudgetGuard, aiLimiter, async (req, res) => {
   const candidate = store.getCandidate(req.user.org_id, req.params.id);
   if (!candidate) return res.status(404).json({ error: 'candidate not found' });
   try {
     const jobText = jobContext(req.user.org_id, req.body).description;
     const result = await ai.interviewKit(candidate.record, { jobText });
+    meterAi(req, 'interview_kit', result);
     audit.record(req.user.org_id, req.user.email, 'ai.interview_kit', req.params.id, { mode: result.mode });
     res.json(result);
   } catch (err) {
@@ -457,12 +548,13 @@ app.post('/api/candidates/:id/interview-kit', auth.requireAuth, aiEnabled, aiLim
 });
 
 // A personalized first-contact outreach draft, optionally for a specific job.
-app.post('/api/candidates/:id/outreach', auth.requireAuth, aiEnabled, aiLimiter, async (req, res) => {
+app.post('/api/candidates/:id/outreach', auth.requireAuth, aiEnabled, aiBudgetGuard, aiLimiter, async (req, res) => {
   const candidate = store.getCandidate(req.user.org_id, req.params.id);
   if (!candidate) return res.status(404).json({ error: 'candidate not found' });
   try {
     const job = jobContext(req.user.org_id, req.body);
     const result = await ai.outreach(candidate.record, { jobText: job.description, jobTitle: job.title, tone: (req.body || {}).tone });
+    meterAi(req, 'outreach', result);
     audit.record(req.user.org_id, req.user.email, 'ai.outreach', req.params.id, { mode: result.mode });
     res.json(result);
   } catch (err) {
@@ -659,8 +751,11 @@ app.get('/api/health', (_req, res) => res.json({ ok: true }));
 // JSON for anything that slipped past a route's own try/catch — notably
 // multer limit errors (too many files / file too large), which are thrown
 // before the handler body runs.
-app.use((err, _req, res, _next) => {
+app.use((err, req, res, _next) => {
   const status = err.status || (err.name === 'MulterError' ? 400 : 500);
+  if (status >= 500) {
+    logger.captureError(err, { path: req.path, method: req.method, org: req.user ? req.user.org_id : undefined });
+  }
   res.status(status).json({ error: err.message });
 });
 
@@ -676,7 +771,20 @@ if (fs.existsSync(WEB_DIST)) {
 
 const PORT = process.env.PORT || 4000;
 if (require.main === module) {
-  app.listen(PORT, () => console.log(`transformer API listening on http://localhost:${PORT}`));
+  // Enforce data-retention on boot, then once a day. Errors here must never
+  // crash the server. The interval is unref'd so it doesn't hold the process.
+  const sweep = () => {
+    try {
+      const { purged } = store.purgeAllOrgs();
+      if (purged) logger.info('retention.sweep', { purged });
+    } catch (err) {
+      logger.captureError(err, { job: 'retention.sweep' });
+    }
+  };
+  sweep();
+  setInterval(sweep, 24 * 60 * 60 * 1000).unref();
+
+  app.listen(PORT, () => logger.info('server.start', { port: PORT, ai: llm.mode() }));
 }
 
 module.exports = app;

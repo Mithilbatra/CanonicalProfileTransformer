@@ -12,9 +12,13 @@ const STAGE_LABEL = {
   offer: 'Offer', hired: 'Hired', rejected: 'Rejected',
 };
 
+const PAGE_SIZE = 50;
+
 export default function Candidates() {
   const toast = useToast();
   const [candidates, setCandidates] = useState([]);
+  const [total, setTotal] = useState(0);
+  const [page, setPage] = useState(0);
   const [stages, setStages] = useState([]);
   const [query, setQuery] = useState('');
   const [skill, setSkill] = useState('');
@@ -44,12 +48,14 @@ export default function Candidates() {
       if (query) params.set('q', query);
       if (skill) params.set('skill', skill);
       if (stageFilter) params.set('stage', stageFilter);
-      const qs = params.toString();
-      const data = await api(`/api/candidates${qs ? '?' + qs : ''}`);
+      params.set('limit', String(PAGE_SIZE));
+      params.set('offset', String(page * PAGE_SIZE));
+      const data = await api(`/api/candidates?${params.toString()}`);
       // defensive: tolerate an unexpected response shape (e.g. a version
       // mismatch serving HTML) and guarantee every row has meta, so a render
       // can never white-screen — degrade to empty + a visible error instead.
       setCandidates((data.candidates || []).map((c) => ({ ...c, meta: c.meta || { stage: 'new', tags: [], note: null } })));
+      setTotal(data.total ?? (data.candidates || []).length);
       if (data.stages) setStages(data.stages);
       setError(null);
     } catch (err) {
@@ -57,12 +63,15 @@ export default function Candidates() {
     } finally {
       setLoading(false);
     }
-  }, [query, skill, stageFilter]);
+  }, [query, skill, stageFilter, page]);
 
   useEffect(() => {
     const t = setTimeout(load, 250); // debounce typing
     return () => clearTimeout(t);
   }, [load]);
+
+  // Changing a filter returns to the first page.
+  useEffect(() => { setPage(0); }, [query, skill, stageFilter]);
 
   useEffect(() => {
     api('/api/views').then((d) => setViews(d.views)).catch(() => {});
@@ -358,6 +367,18 @@ export default function Candidates() {
             </label>
             <button className="ghost sm danger-ghost" onClick={bulkDelete}>delete</button>
             <button className="linklike" onClick={clearPicked}>clear</button>
+          </span>
+        </div>
+      )}
+
+      {!match && !aiSearch && total > PAGE_SIZE && (
+        <div className="pager">
+          <span className="pager-info">
+            {page * PAGE_SIZE + 1}–{Math.min(total, page * PAGE_SIZE + candidates.length)} of {total}
+          </span>
+          <span className="pager-btns">
+            <button className="ghost sm" disabled={page === 0} onClick={() => setPage((p) => Math.max(0, p - 1))}>prev</button>
+            <button className="ghost sm" disabled={(page + 1) * PAGE_SIZE >= total} onClick={() => setPage((p) => p + 1)}>next</button>
           </span>
         </div>
       )}

@@ -9,9 +9,77 @@ export default function Admin() {
   return (
     <section className="admin">
       <Members />
+      <Settings />
       <Backup />
       <AuditLog />
     </section>
+  );
+}
+
+// Data-retention window + AI daily-cost cap, and today's AI usage.
+function Settings() {
+  const toast = useToast();
+  const [settings, setSettings] = useState(null);
+  const [budget, setBudget] = useState(null);
+  const [retention, setRetention] = useState('');
+  const [cap, setCap] = useState('');
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    api('/api/org/settings').then((s) => {
+      setSettings(s);
+      setRetention(s.retention_days != null ? String(s.retention_days) : '');
+      setCap(s.ai_daily_cap != null ? String(s.ai_daily_cap) : '');
+    }).catch(() => {});
+    api('/api/ai/status').then((d) => setBudget(d.budget)).catch(() => {});
+  }, []);
+
+  async function save() {
+    setBusy(true);
+    try {
+      const s = await api('/api/org/settings', { method: 'PUT', body: { retention_days: retention, ai_daily_cap: cap } });
+      setSettings(s);
+      toast('Settings saved');
+    } catch (err) {
+      toast(err.message, 'bad');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function purge() {
+    if (!window.confirm('Delete every candidate whose data is older than the retention window? This cannot be undone.')) return;
+    try {
+      const { purged } = await api('/api/org/purge', { method: 'POST' });
+      toast(purged ? `Purged ${purged} candidate${purged === 1 ? '' : 's'}` : 'Nothing to purge');
+    } catch (err) {
+      toast(err.message, 'bad');
+    }
+  }
+
+  return (
+    <div className="admin-block">
+      <h2>settings</h2>
+      <div className="settings-grid">
+        <label className="set-row">
+          <span className="set-label">Data retention (days)</span>
+          <input type="number" min="1" max="3650" placeholder="keep forever" value={retention} onChange={(e) => setRetention(e.target.value)} />
+          <span className="set-hint">Candidates with no source data newer than this are auto-deleted daily. Empty = keep forever.</span>
+        </label>
+        <label className="set-row">
+          <span className="set-label">AI requests / day</span>
+          <input type="number" min="0" max="100000" placeholder={settings && settings.ai_effective_cap != null ? `default ${settings.ai_effective_cap}` : 'default'} value={cap} onChange={(e) => setCap(e.target.value)} />
+          <span className="set-hint">
+            Caps live AI calls against the shared model key.
+            {budget && <> Today: <b>{budget.used}/{budget.cap}</b> used.</>}
+          </span>
+        </label>
+      </div>
+      <div className="backup-row">
+        <button className="ghost" onClick={save} disabled={busy}>{busy ? 'saving…' : 'save settings'}</button>
+        <button className="ghost sm danger-ghost" onClick={purge} disabled={!settings || settings.retention_days == null} title={settings && settings.retention_days == null ? 'set a retention window first' : 'run the cleanup now'}>run cleanup now</button>
+      </div>
+    </div>
   );
 }
 

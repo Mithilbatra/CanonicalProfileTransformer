@@ -12,7 +12,7 @@ const Database = require('better-sqlite3');
 // so one organization can never see or merge with another's data.
 
 const DB_PATH = process.env.DB_PATH || path.join(__dirname, '..', 'data', 'app.db');
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 3;
 
 if (DB_PATH !== ':memory:') {
   fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
@@ -196,6 +196,49 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS idx_job_candidates_job ON job_candidates(org_id, job_id);
   CREATE INDEX IF NOT EXISTS idx_job_candidates_cid ON job_candidates(org_id, candidate_id);
+
+  -- Per-organization settings: data-retention policy and an AI daily-cost cap.
+  -- A null value means "use the default" (keep forever / server default cap).
+  CREATE TABLE IF NOT EXISTS org_settings (
+    org_id         INTEGER PRIMARY KEY REFERENCES orgs(id),
+    retention_days INTEGER,   -- null = keep candidate data forever
+    ai_daily_cap   INTEGER,   -- null = fall back to the AI_DAILY_CAP env default
+    updated_at     TEXT NOT NULL DEFAULT (datetime('now'))
+  );
+
+  -- Per-org, per-day AI usage counters, so the layer can enforce a spend cap
+  -- on the (shared) model API key and surface remaining budget.
+  CREATE TABLE IF NOT EXISTS ai_usage (
+    org_id  INTEGER NOT NULL,
+    day     TEXT NOT NULL,       -- YYYY-MM-DD (UTC)
+    feature TEXT NOT NULL,
+    count   INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (org_id, day, feature)
+  );
+
+  -- Derived search index over candidates: a denormalized, lowercased blob for
+  -- text search plus a sort key, so the list can paginate and filter in SQL
+  -- instead of loading and scanning every record in JS. Rebuilt with the
+  -- candidates it mirrors (see store.remerge / store.rebuild).
+  CREATE TABLE IF NOT EXISTS candidate_index (
+    org_id             INTEGER NOT NULL,
+    candidate_id       TEXT NOT NULL,
+    sort_name          TEXT,
+    search_text        TEXT,
+    overall_confidence REAL,
+    PRIMARY KEY (org_id, candidate_id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_candidate_index_sort ON candidate_index(org_id, sort_name);
+
+  -- Derived skill membership, so "filter by skill = React" is an indexed
+  -- lookup rather than a JSON scan. Skill names are stored lowercased.
+  CREATE TABLE IF NOT EXISTS candidate_skills (
+    org_id       INTEGER NOT NULL,
+    candidate_id TEXT NOT NULL,
+    skill        TEXT NOT NULL
+  );
+  CREATE INDEX IF NOT EXISTS idx_candidate_skills_skill ON candidate_skills(org_id, skill);
+  CREATE INDEX IF NOT EXISTS idx_candidate_skills_cid ON candidate_skills(org_id, candidate_id);
 `);
 
 if (isLegacy) migrateLegacy();

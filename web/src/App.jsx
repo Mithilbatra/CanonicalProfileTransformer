@@ -5,6 +5,7 @@ import Jobs from './Jobs';
 import Insights from './Insights';
 import Admin from './Admin';
 import Login from './Login';
+import Privacy from './Privacy';
 import ErrorBoundary from './ErrorBoundary';
 import { ResetPassword, AcceptInvite } from './AuthFlow';
 import { api, getSession, clearSession, saveSession } from './api';
@@ -113,6 +114,7 @@ export default function App() {
               : <AcceptInvite token={flow.token} onDone={endFlow} />
           ) : (
             <>
+              {view === 'privacy' && <Privacy onBack={() => setView('playground')} />}
               {view === 'playground' && <Playground />}
               {view === 'database' && (session
                 ? <Candidates />
@@ -131,7 +133,8 @@ export default function App() {
 
       <footer>
         <div className="wrap">
-          Name : Mithil Batra | Roll No : 231210068 | College : NIT DELHI | Personal Email : mithil.batra05@gmail.com | College Email : 231210068@nitdelhi.ac.in
+          <button className="linklike foot-link" onClick={() => setView('privacy')}>Privacy &amp; candidate data</button>
+          <div className="foot-id">Name : Mithil Batra | Roll No : 231210068 | College : NIT DELHI | Personal Email : mithil.batra05@gmail.com | College Email : 231210068@nitdelhi.ac.in</div>
         </div>
       </footer>
     </>

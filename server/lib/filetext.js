@@ -88,6 +88,12 @@ async function bufferToText(buffer, name = '') {
 // loaded lazily — it is a heavy module and most uploads never need it.
 // The first run downloads the English model (~10MB) into data/ocr-cache.
 async function ocrImage(buffer) {
+  // OCR is by far the heaviest extraction path; cap the input so a huge image
+  // can't tie up the (single) process. MAX_OCR_MB tunes it for a deployment.
+  const maxMb = Number(process.env.MAX_OCR_MB || 6);
+  if (buffer.length > maxMb * 1024 * 1024) {
+    throw new Error(`image is too large to OCR (over ${maxMb} MB) — upload a smaller photo, or a text-based PDF/DOCX`);
+  }
   let createWorker;
   try {
     ({ createWorker } = require('tesseract.js'));
