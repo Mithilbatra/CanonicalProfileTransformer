@@ -23,7 +23,9 @@ export default function Jobs() {
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(() => {
-    api('/api/jobs').then((d) => { setJobs(d.jobs); setStages(d.stages); }).catch((e) => setError(e.message));
+    api('/api/jobs')
+      .then((d) => { setJobs(Array.isArray(d.jobs) ? d.jobs : []); setStages(Array.isArray(d.stages) ? d.stages : []); })
+      .catch((e) => setError(e.message));
   }, []);
   useEffect(load, [load]);
 
@@ -86,7 +88,7 @@ function JobBoard({ id, stages, onBack }) {
 
   const load = useCallback(() => {
     api(`/api/jobs/${id}`).then(setJob).catch((e) => setError(e.message));
-    api(`/api/jobs/${id}/candidates`).then((d) => setRows(d.candidates)).catch((e) => setError(e.message));
+    api(`/api/jobs/${id}/candidates`).then((d) => setRows(Array.isArray(d.candidates) ? d.candidates : [])).catch((e) => setError(e.message));
   }, [id]);
   useEffect(load, [load]);
 
@@ -196,7 +198,7 @@ function AddPanel({ id, onJob, onAdded }) {
   useEffect(() => {
     setBusy(true);
     api(`/api/jobs/${id}/match`, { method: 'POST', body: { blind } })
-      .then((d) => setResults(d.results))
+      .then((d) => setResults(Array.isArray(d.results) ? d.results : []))
       .catch((e) => setError(e.message))
       .finally(() => setBusy(false));
   }, [id, blind]);

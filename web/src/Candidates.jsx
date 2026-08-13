@@ -46,8 +46,10 @@ export default function Candidates() {
       if (stageFilter) params.set('stage', stageFilter);
       const qs = params.toString();
       const data = await api(`/api/candidates${qs ? '?' + qs : ''}`);
-      // defensive: guarantee every row has meta so a render can never crash
-      setCandidates(data.candidates.map((c) => ({ ...c, meta: c.meta || { stage: 'new', tags: [], note: null } })));
+      // defensive: tolerate an unexpected response shape (e.g. a version
+      // mismatch serving HTML) and guarantee every row has meta, so a render
+      // can never white-screen — degrade to empty + a visible error instead.
+      setCandidates((data.candidates || []).map((c) => ({ ...c, meta: c.meta || { stage: 'new', tags: [], note: null } })));
       if (data.stages) setStages(data.stages);
       setError(null);
     } catch (err) {
