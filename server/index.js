@@ -37,12 +37,14 @@ function aiEnabled(_req, res, next) {
   next();
 }
 
-// Enforce the per-org daily AI budget. Only live (billable) calls are metered
-// — mock/local drafts cost nothing, so they're never capped.
-function aiBudgetGuard(req, res, next) {
+// Reserve a slot in the org's daily AI budget before the model is called. Only
+// live (billable) calls are metered; mock/local drafts cost nothing. Taking the
+// slot up front means a burst of requests can't overshoot the cap; a request
+// that then fails still counts, which errs on the side of spending less.
+const aiBudgetGuard = (feature) => (req, res, next) => {
   if (llm.mode() === 'live') {
-    const budget = store.aiBudget(req.user.org_id);
-    if (budget.exceeded) {
+    const budget = store.reserveAiCall(req.user.org_id, feature);
+    if (!budget.ok) {
       return res.status(429).json({
         error: `daily AI limit reached (${budget.cap} requests/day). It resets tomorrow; an admin can raise it in settings.`,
         budget,
@@ -50,13 +52,7 @@ function aiBudgetGuard(req, res, next) {
     }
   }
   next();
-}
-
-// Count a completed AI response against the org's budget when it actually hit
-// the model (mode 'live'); fallbacks and mock drafts aren't billable.
-function meterAi(req, feature, result) {
-  if (result && result.mode === 'live') store.recordAiUsage(req.user.org_id, feature);
-}
+};
 
 const ROOT = path.join(__dirname, '..');
 const SAMPLES = path.join(ROOT, 'samples');
@@ -513,12 +509,11 @@ app.get('/api/ai/status', auth.requireAuth, (req, res) => {
 // Natural-language candidate search: the model parses the query into a structured
 // filter; the deterministic engine ranks. The parsed filter is returned too, so
 // the recruiter can see exactly what was searched for.
-app.post('/api/ai/search', auth.requireAuth, aiEnabled, aiBudgetGuard, aiLimiter, async (req, res) => {
+app.post('/api/ai/search', auth.requireAuth, aiEnabled, aiLimiter, aiBudgetGuard('search'), async (req, res) => {
   try {
     const { query, limit } = req.body || {};
     const cap = Math.min(50, Math.max(1, parseInt(limit, 10) || 20));
     const result = await ai.search(query, store.listCandidates(req.user.org_id), { limit: cap });
-    meterAi(req, 'search', result);
     audit.record(req.user.org_id, req.user.email, 'ai.search', null, { mode: result.mode, results: result.count });
     res.json(result);
   } catch (err) {
@@ -527,12 +522,11 @@ app.post('/api/ai/search', auth.requireAuth, aiEnabled, aiBudgetGuard, aiLimiter
 });
 
 // A grounded recruiter brief (summary + strengths + gaps) for one candidate.
-app.post('/api/candidates/:id/summary', auth.requireAuth, aiEnabled, aiBudgetGuard, aiLimiter, async (req, res) => {
+app.post('/api/candidates/:id/summary', auth.requireAuth, aiEnabled, aiLimiter, aiBudgetGuard('summary'), async (req, res) => {
   const candidate = store.getCandidate(req.user.org_id, req.params.id);
   if (!candidate) return res.status(404).json({ error: 'candidate not found' });
   try {
     const result = await ai.summarize(candidate.record);
-    meterAi(req, 'summary', result);
     audit.record(req.user.org_id, req.user.email, 'ai.summary', req.params.id, { mode: result.mode });
     res.json(result);
   } catch (err) {
@@ -541,13 +535,12 @@ app.post('/api/candidates/:id/summary', auth.requireAuth, aiEnabled, aiBudgetGua
 });
 
 // Tailored screening questions, optionally focused by a job's description.
-app.post('/api/candidates/:id/interview-kit', auth.requireAuth, aiEnabled, aiBudgetGuard, aiLimiter, async (req, res) => {
+app.post('/api/candidates/:id/interview-kit', auth.requireAuth, aiEnabled, aiLimiter, aiBudgetGuard('interview_kit'), async (req, res) => {
   const candidate = store.getCandidate(req.user.org_id, req.params.id);
   if (!candidate) return res.status(404).json({ error: 'candidate not found' });
   try {
     const jobText = jobContext(req.user.org_id, req.body).description;
     const result = await ai.interviewKit(candidate.record, { jobText });
-    meterAi(req, 'interview_kit', result);
     audit.record(req.user.org_id, req.user.email, 'ai.interview_kit', req.params.id, { mode: result.mode });
     res.json(result);
   } catch (err) {
@@ -556,13 +549,12 @@ app.post('/api/candidates/:id/interview-kit', auth.requireAuth, aiEnabled, aiBud
 });
 
 // A personalized first-contact outreach draft, optionally for a specific job.
-app.post('/api/candidates/:id/outreach', auth.requireAuth, aiEnabled, aiBudgetGuard, aiLimiter, async (req, res) => {
+app.post('/api/candidates/:id/outreach', auth.requireAuth, aiEnabled, aiLimiter, aiBudgetGuard('outreach'), async (req, res) => {
   const candidate = store.getCandidate(req.user.org_id, req.params.id);
   if (!candidate) return res.status(404).json({ error: 'candidate not found' });
   try {
     const job = jobContext(req.user.org_id, req.body);
     const result = await ai.outreach(candidate.record, { jobText: job.description, jobTitle: job.title, tone: (req.body || {}).tone });
-    meterAi(req, 'outreach', result);
     audit.record(req.user.org_id, req.user.email, 'ai.outreach', req.params.id, { mode: result.mode });
     res.json(result);
   } catch (err) {
@@ -829,6 +821,7 @@ if (require.main === module) {
       if (purged) logger.info('retention.sweep', { purged });
       // likely a mistyped window: nothing was deleted; an admin must confirm it
       for (const b of blocked) logger.warn('retention.blocked', b);
+      store.pruneAiUsage();
     } catch (err) {
       logger.captureError(err, { job: 'retention.sweep' });
     }

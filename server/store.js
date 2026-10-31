@@ -642,20 +642,35 @@ function utcDay() {
   return new Date().toISOString().slice(0, 10);
 }
 
-// Count one live AI call against today's per-org budget.
-function recordAiUsage(orgId, feature) {
-  db.prepare(
-    `INSERT INTO ai_usage (org_id, day, feature, count) VALUES (?, ?, ?, 1)
-     ON CONFLICT(org_id, day, feature) DO UPDATE SET count = count + 1`
-  ).run(orgId, utcDay(), String(feature || 'ai'));
-}
-
 // Today's AI budget for an org: how many live calls used, the cap, and whether
 // it's exceeded. Only live (billable) calls are counted by the routes.
 function aiBudget(orgId) {
   const cap = getOrgSettings(orgId).ai_effective_cap;
   const used = db.prepare('SELECT COALESCE(SUM(count), 0) AS n FROM ai_usage WHERE org_id = ? AND day = ?').get(orgId, utcDay()).n;
   return { used, cap, remaining: Math.max(0, cap - used), exceeded: used >= cap };
+}
+
+// Reserve one live AI call against today's budget. Check and increment run in
+// one IMMEDIATE transaction, so concurrent requests (or several processes on
+// the same database) can't both take the last slot. Returns the budget after
+// the attempt, with ok=false when the cap was already reached.
+const _reserveAiCall = db.transaction((orgId, feature) => {
+  if (aiBudget(orgId).exceeded) return { ...aiBudget(orgId), ok: false };
+  db.prepare(
+    `INSERT INTO ai_usage (org_id, day, feature, count) VALUES (?, ?, ?, 1)
+     ON CONFLICT(org_id, day, feature) DO UPDATE SET count = count + 1`
+  ).run(orgId, utcDay(), String(feature || 'ai'));
+  return { ...aiBudget(orgId), ok: true };
+});
+
+function reserveAiCall(orgId, feature) {
+  return _reserveAiCall.immediate(orgId, feature);
+}
+
+// Only today's rows drive the cap; keep 30 days to reconcile against the
+// provider's bill and drop older rows so the table can't grow without bound.
+function pruneAiUsage(keepDays = 30) {
+  return db.prepare("DELETE FROM ai_usage WHERE day < date('now', ?)").run(`-${keepDays} days`).changes;
 }
 
 // ---- data retention: purge candidates past the org's retention window ----
@@ -919,7 +934,8 @@ module.exports = {
   getCandidate,
   getOrgSettings,
   setOrgSettings,
-  recordAiUsage,
+  reserveAiCall,
+  pruneAiUsage,
   aiBudget,
   purgeExpired,
   purgeAllOrgs,

@@ -67,19 +67,21 @@ test('stage filter: COALESCE handles candidates with no meta row (default "new")
   assert.equal(store.queryCandidates(ORG, { stage: 'new' }).total, all - 1);
 });
 
-test('AI budget: cap comes from settings and metering marks it exceeded', () => {
+test('AI budget: reservations stop exactly at the cap and refusals are not counted', () => {
   assert.equal(store.getOrgSettings(ORG).ai_effective_cap, 200, 'server default cap');
   store.setOrgSettings(ORG, { ai_daily_cap: 2 });
-  assert.equal(store.aiBudget(ORG).cap, 2);
-  assert.equal(store.aiBudget(ORG).exceeded, false);
-  store.recordAiUsage(ORG, 'summary');
-  store.recordAiUsage(ORG, 'search');
+  const tries = [1, 2, 3].map(() => store.reserveAiCall(ORG, 'summary'));
+  assert.deepEqual(tries.map((t) => t.ok), [true, true, false]);
   const b = store.aiBudget(ORG);
-  assert.equal(b.used, 2);
-  assert.equal(b.remaining, 0);
-  assert.equal(b.exceeded, true);
+  assert.deepEqual([b.used, b.remaining, b.exceeded], [2, 0, true]);
   store.setOrgSettings(ORG, { ai_daily_cap: '' }); // clear -> back to default
   assert.equal(store.getOrgSettings(ORG).ai_effective_cap, 200);
+});
+
+test('AI usage: rows older than 30 days are pruned, today is kept', () => {
+  db.prepare("INSERT INTO ai_usage (org_id, day, feature, count) VALUES (?, '2000-01-01', 'old', 5)").run(ORG);
+  assert.equal(store.pruneAiUsage(), 1);
+  assert.equal(store.aiBudget(ORG).used, 2);
 });
 
 test('settings validation: out-of-range values are rejected', () => {
