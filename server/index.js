@@ -265,24 +265,32 @@ app.post('/api/org/restore', auth.requireAuth, auth.requireRole('admin'), (req, 
   }
 });
 
-// Org settings: data-retention window + AI daily-cost cap (admin only).
+// Org settings: data-retention window + AI daily-cost cap (admin only). Each
+// response carries a dry-run of the retention purge, so the admin sees how many
+// candidates are past the window, and whether the daily sweep is holding back.
+function settingsView(orgId) {
+  const preview = store.purgeExpired(orgId, { dryRun: true });
+  return { ...store.getOrgSettings(orgId), retention_pending: preview.expired, retention_blocked: preview.blocked };
+}
+
 app.get('/api/org/settings', auth.requireAuth, auth.requireRole('admin'), (req, res) => {
-  res.json(store.getOrgSettings(req.user.org_id));
+  res.json(settingsView(req.user.org_id));
 });
 
 app.put('/api/org/settings', auth.requireAuth, auth.requireRole('admin'), (req, res) => {
   try {
     const result = store.setOrgSettings(req.user.org_id, req.body || {});
     audit.record(req.user.org_id, req.user.email, 'org.settings', null, result);
-    res.json(result);
+    res.json(settingsView(req.user.org_id));
   } catch (err) {
     res.status(err.status || 500).json({ error: err.message });
   }
 });
 
-// Run the retention purge now (in addition to the daily sweep) — admin only.
+// Run the retention purge now — admin only. The admin confirmed the exact count
+// in the UI, so this may exceed the share the unattended sweep is allowed.
 app.post('/api/org/purge', auth.requireAuth, auth.requireRole('admin'), (req, res) => {
-  const result = store.purgeExpired(req.user.org_id);
+  const result = store.purgeExpired(req.user.org_id, { force: true });
   audit.record(req.user.org_id, req.user.email, 'org.purge', null, result);
   res.json(result);
 });
@@ -817,8 +825,10 @@ if (require.main === module) {
   // crash the server. The interval is unref'd so it doesn't hold the process.
   const sweep = () => {
     try {
-      const { purged } = store.purgeAllOrgs();
+      const { purged, blocked } = store.purgeAllOrgs();
       if (purged) logger.info('retention.sweep', { purged });
+      // likely a mistyped window: nothing was deleted; an admin must confirm it
+      for (const b of blocked) logger.warn('retention.blocked', b);
     } catch (err) {
       logger.captureError(err, { job: 'retention.sweep' });
     }

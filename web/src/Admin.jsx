@@ -48,10 +48,12 @@ function Settings() {
   }
 
   async function purge() {
-    if (!window.confirm('Delete every candidate whose data is older than the retention window? This cannot be undone.')) return;
+    const n = settings.retention_pending;
+    if (!window.confirm(`Permanently delete ${n} candidate${n === 1 ? '' : 's'} whose data is older than ${settings.retention_days} days? This cannot be undone.`)) return;
     try {
       const { purged } = await api('/api/org/purge', { method: 'POST' });
       toast(purged ? `Purged ${purged} candidate${purged === 1 ? '' : 's'}` : 'Nothing to purge');
+      setSettings(await api('/api/org/settings'));
     } catch (err) {
       toast(err.message, 'bad');
     }
@@ -64,7 +66,15 @@ function Settings() {
         <label className="set-row">
           <span className="set-label">Data retention (days)</span>
           <input type="number" min="1" max="3650" placeholder="keep forever" value={retention} onChange={(e) => setRetention(e.target.value)} />
-          <span className="set-hint">Candidates with no source data newer than this are auto-deleted daily. Empty = keep forever.</span>
+          <span className="set-hint">
+            Candidates with no source data newer than this are auto-deleted daily. Empty = keep forever.
+            {settings && settings.retention_days != null && <> <b>{settings.retention_pending}</b> past the window now.</>}
+          </span>
+          {settings && settings.retention_blocked && (
+            <span className="set-warn">
+              More than half of your candidates are past this window, so the daily cleanup is paused. If the number is right, delete them below.
+            </span>
+          )}
         </label>
         <label className="set-row">
           <span className="set-label">AI requests / day</span>
@@ -77,7 +87,9 @@ function Settings() {
       </div>
       <div className="backup-row">
         <button className="ghost" onClick={save} disabled={busy}>{busy ? 'saving…' : 'save settings'}</button>
-        <button className="ghost sm danger-ghost" onClick={purge} disabled={!settings || settings.retention_days == null} title={settings && settings.retention_days == null ? 'set a retention window first' : 'run the cleanup now'}>run cleanup now</button>
+        <button className="ghost sm danger-ghost" onClick={purge} disabled={!settings || !settings.retention_pending} title="delete the candidates past the retention window now">
+          delete expired{settings && settings.retention_pending ? ` (${settings.retention_pending})` : ''}
+        </button>
       </div>
     </div>
   );

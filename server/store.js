@@ -660,11 +660,19 @@ function aiBudget(orgId) {
 
 // ---- data retention: purge candidates past the org's retention window ----
 
-// Delete candidates whose most recent source data is older than retention_days.
-// A candidate with no dated subjects is left alone. Returns the count purged.
-function purgeExpired(orgId) {
+// An unattended purge may remove at most this share of an org's candidates.
+// More than that is almost always a mistyped window (1 day meant as 365), so it
+// waits for an admin to confirm it with the count in front of them.
+const AUTO_PURGE_MAX_SHARE = 0.5;
+
+// Delete candidates whose most recent source data is older than retention_days,
+// in one transaction. Unless `force` is set, a purge over AUTO_PURGE_MAX_SHARE
+// is refused and reported as `blocked`; `dryRun` only counts. Returns
+// { purged, expired, total, blocked }.
+function purgeExpired(orgId, { force = false, dryRun = false } = {}) {
   const { retention_days } = getOrgSettings(orgId);
-  if (!retention_days) return { purged: 0 };
+  const total = countCandidates(orgId);
+  if (!retention_days) return { purged: 0, expired: 0, total, blocked: false };
   // Compute the cutoff in SQLite's own datetime format so string comparison
   // against subjects.created_at is valid.
   const cutoff = db.prepare("SELECT datetime('now', ?) AS c").get(`-${retention_days} days`).c;
@@ -678,15 +686,28 @@ function purgeExpired(orgId) {
     const newest = db.prepare(`SELECT MAX(created_at) AS m FROM subjects WHERE org_id = ? AND id IN (${marks})`).get(orgId, ...ids).m;
     if (newest && newest < cutoff) expired.push(row.candidate_id);
   }
-  for (const id of expired) { try { deleteCandidate(orgId, id); } catch { /* already gone */ } }
-  return { purged: expired.length };
+
+  const blocked = !force && expired.length > total * AUTO_PURGE_MAX_SHARE;
+  if (dryRun || blocked || !expired.length) return { purged: 0, expired: expired.length, total, blocked };
+  db.transaction(() => {
+    for (const id of expired) {
+      try { deleteCandidate(orgId, id); } catch (err) { if (err.status !== 404) throw err; } // 404: already gone
+    }
+  })();
+  return { purged: expired.length, expired: expired.length, total, blocked: false };
 }
 
-// Sweep every org (used by a periodic job at startup).
+// The daily sweep over every org. Blocked orgs are returned (nothing deleted)
+// so the caller can log them for an admin to review.
 function purgeAllOrgs() {
   let purged = 0;
-  for (const { id } of db.prepare('SELECT id FROM orgs').all()) purged += purgeExpired(id).purged;
-  return { purged };
+  const blocked = [];
+  for (const { id } of db.prepare('SELECT id FROM orgs').all()) {
+    const r = purgeExpired(id);
+    purged += r.purged;
+    if (r.blocked) blocked.push({ org: id, expired: r.expired, total: r.total });
+  }
+  return { purged, blocked };
 }
 
 // ---- duplicate review: suggest, merge, dismiss, undo -------------------

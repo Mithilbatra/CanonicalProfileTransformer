@@ -109,22 +109,36 @@ test('upload guard: an oversized image is refused before OCR runs', async () => 
   if (prev == null) delete process.env.MAX_OCR_MB; else process.env.MAX_OCR_MB = prev;
 });
 
-test('retention purge: candidates whose data is older than the window are deleted', () => {
-  const before = store.queryCandidates(ORG, {}).total;
-  assert.ok(before > 0);
-  // age every subject in this org well past any window
-  db.prepare("UPDATE subjects SET created_at = '2000-01-01 00:00:00' WHERE org_id = ?").run(ORG);
+test('retention purge: trims expired candidates, but a mass purge waits for an admin', () => {
+  const all = store.queryCandidates(ORG, {}).items;
+  assert.ok(all.length >= 2);
   store.setOrgSettings(ORG, { retention_days: 30 });
-  const { purged } = store.purgeExpired(ORG);
-  assert.equal(purged, before, 'all stale candidates purged');
+  const ageSubjectsOf = (cid) => db.prepare(
+    `UPDATE subjects SET created_at = '2000-01-01 00:00:00' WHERE org_id = ? AND id IN
+       (SELECT value FROM json_each((SELECT subject_ids FROM candidates WHERE org_id = ? AND candidate_id = ?)))`
+  ).run(ORG, ORG, cid);
+
+  // one expired candidate (no more than half the pool): the sweep just trims it
+  ageSubjectsOf(all[0].candidate_id);
+  const trim = store.purgeExpired(ORG);
+  assert.deepEqual([trim.purged, trim.blocked], [1, false]);
+
+  // every remaining candidate expired, e.g. a mistyped window: refused, nothing deleted
+  db.prepare("UPDATE subjects SET created_at = '2000-01-01 00:00:00' WHERE org_id = ?").run(ORG);
+  const left = store.queryCandidates(ORG, {}).total;
+  const mass = store.purgeExpired(ORG);
+  assert.deepEqual([mass.purged, mass.blocked, mass.expired], [0, true, left]);
+  assert.equal(store.queryCandidates(ORG, {}).total, left, 'nothing deleted while blocked');
+  assert.equal(store.purgeExpired(ORG, { dryRun: true, force: true }).purged, 0, 'a dry run never deletes');
+
+  // an admin confirms it: everything past the window goes, index + skills with it
+  assert.equal(store.purgeExpired(ORG, { force: true }).purged, left);
   assert.equal(store.queryCandidates(ORG, {}).total, 0);
-  // index + skills were torn down too
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM candidate_index WHERE org_id = ?').get(ORG).n, 0);
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM candidate_skills WHERE org_id = ?').get(ORG).n, 0);
 });
 
 test('retention: no window set means nothing is purged', () => {
   const org2 = auth.register('keep@harden.test', 'longpassword', 'Keep Co').org_id;
-  // (no candidates, but the guard should still no-op cleanly)
-  assert.deepEqual(store.purgeExpired(org2), { purged: 0 });
+  assert.deepEqual(store.purgeExpired(org2), { purged: 0, expired: 0, total: 0, blocked: false });
 });
