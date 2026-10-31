@@ -773,8 +773,21 @@ function reviewSummary(id, rec) {
   };
 }
 
-// Candidate pairs worth reviewing as possible duplicates. Bucketed by name-token
-// prefix so this stays sub-quadratic on large pools.
+// Blocking keys for a name: first initial + the surname's first 3 letters, in
+// both name orders ("Jon Smith" and "Smith, Jonathan" share one). Only names
+// sharing a key are compared, so a common surname ("Kumar", "Smith") can't put
+// thousands of people in one bucket, and different first names never pair.
+// shortcut: a one-word name only meets other one-word names; add a first-token key if that matters.
+function blockKeys(fullName) {
+  const t = nameTokens(fullName || '');
+  if (!t.length) return [];
+  const first = t[0];
+  const last = t[t.length - 1];
+  return [...new Set([`${first[0]}|${last.slice(0, 3)}`, `${last[0]}|${first.slice(0, 3)}`])];
+}
+
+// Candidate pairs worth reviewing as possible duplicates, compared only within
+// a blocking key so the scan stays near-linear on large pools.
 function findMergeSuggestions(orgId, { limit = 100 } = {}) {
   const cands = db
     .prepare('SELECT candidate_id, record FROM candidates WHERE org_id = ?')
@@ -784,8 +797,7 @@ function findMergeSuggestions(orgId, { limit = 100 } = {}) {
 
   const buckets = new Map();
   for (const c of cands) {
-    const prefixes = new Set(nameTokens(c.rec.full_name || '').filter((t) => t.length >= 3).map((t) => t.slice(0, 3)));
-    for (const p of prefixes) { if (!buckets.has(p)) buckets.set(p, []); buckets.get(p).push(c); }
+    for (const key of blockKeys(c.rec.full_name)) { if (!buckets.has(key)) buckets.set(key, []); buckets.get(key).push(c); }
   }
 
   const seen = new Set();

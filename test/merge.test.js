@@ -73,6 +73,18 @@ test('dismiss: a dismissed pair stops being suggested', () => {
   assert.equal(stillThere, false, 'the dismissed pair is gone');
 });
 
+test('blocking: a shared surname and employer alone never pair two people', async () => {
+  const org = auth.register('kumar@merge.test', 'longpassword', 'Kumar Co').org_id;
+  const csv =
+    'Full Name,E-mail,Current Company,Job Title\n' +
+    'Rahul Kumar,rahul@bigcorp.example,BigCorp,Engineer\n' +
+    'Amit Kumar,amit@bigcorp.example,BigCorp,Engineer\n';
+  const r = await extractSources([{ name: 'kumar.csv', content: csv }]);
+  store.ingestSources(org, r.sourceResults);
+  assert.equal(store.listCandidates(org).length, 2);
+  assert.equal(store.findMergeSuggestions(org).length, 0, 'different first names are never compared');
+});
+
 test('merge validation: cannot merge a candidate with itself / a missing id', () => {
   assert.throws(() => store.mergeCandidates(ORG, a, a, 'x'), /itself/);
   assert.throws(() => store.mergeCandidates(ORG, a, 'nope', 'x'), /not found/);

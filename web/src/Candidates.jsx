@@ -42,11 +42,6 @@ export default function Candidates() {
   const [aiSearch, setAiSearch] = useState(null);
   const aiOn = aiInfo && aiInfo.mode !== 'off';
   const [dupOpen, setDupOpen] = useState(false);
-  const [dupCount, setDupCount] = useState(null);
-
-  const refreshDupCount = useCallback(() => {
-    api('/api/merge/suggestions').then((d) => setDupCount(d.suggestions.length)).catch(() => {});
-  }, []);
 
   const load = useCallback(async () => {
     try {
@@ -83,8 +78,7 @@ export default function Candidates() {
     api('/api/views').then((d) => setViews(d.views)).catch(() => {});
     api('/api/jd-templates').then((d) => setTemplates(d.templates)).catch(() => {});
     api('/api/ai/status').then(setAiInfo).catch(() => setAiInfo({ mode: 'off' }));
-    refreshDupCount();
-  }, [refreshDupCount]);
+  }, []);
 
   const clearPicked = () => setPicked(new Set());
   function togglePick(id) {
@@ -272,7 +266,7 @@ export default function Candidates() {
         )}
         <button className="ghost" aria-pressed={matchOpen} onClick={() => { setMatchOpen(!matchOpen); setMatch(null); setAiOpen(false); setAiSearch(null); setDupOpen(false); clearPicked(); }}>match a JD</button>
         <button className="ghost" aria-pressed={dupOpen} onClick={() => { setDupOpen(!dupOpen); setMatchOpen(false); setMatch(null); setAiOpen(false); setAiSearch(null); clearPicked(); }}>
-          review duplicates{dupCount ? ` (${dupCount})` : ''}
+          review duplicates
         </button>
         <span className="export-group">
           {['csv', 'xlsx', 'json'].map((f) => (
@@ -394,7 +388,7 @@ export default function Candidates() {
       )}
 
       {dupOpen ? (
-        <DuplicatesPanel onChanged={() => { load(); refreshDupCount(); }} />
+        <DuplicatesPanel onChanged={load} />
       ) : (
       <div className="db-layout">
         <div className="db-list">
