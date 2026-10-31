@@ -12,7 +12,7 @@ const Database = require('better-sqlite3');
 // so one organization can never see or merge with another's data.
 
 const DB_PATH = process.env.DB_PATH || path.join(__dirname, '..', 'data', 'app.db');
-const SCHEMA_VERSION = 4;
+const SCHEMA_VERSION = 5;
 
 if (DB_PATH !== ':memory:') {
   fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
@@ -239,6 +239,18 @@ db.exec(`
   );
   CREATE INDEX IF NOT EXISTS idx_candidate_skills_skill ON candidate_skills(org_id, skill);
   CREATE INDEX IF NOT EXISTS idx_candidate_skills_cid ON candidate_skills(org_id, candidate_id);
+
+  -- Derived inverse of candidates.subject_ids: which candidate each subject
+  -- belongs to right now. Makes "who holds subject X" an index lookup instead
+  -- of parsing every candidate's subject list (the merge path asks it on every
+  -- upload). Written and torn down with the candidates it mirrors.
+  CREATE TABLE IF NOT EXISTS candidate_subjects (
+    org_id       INTEGER NOT NULL,
+    candidate_id TEXT NOT NULL,
+    subject_id   INTEGER NOT NULL,
+    PRIMARY KEY (org_id, subject_id)
+  );
+  CREATE INDEX IF NOT EXISTS idx_candidate_subjects_cid ON candidate_subjects(org_id, candidate_id);
 
   -- Human-asserted "these are the same person" links between subjects. The
   -- deterministic engine keeps candidates apart when it isn't sure; a recruiter

@@ -33,10 +33,11 @@ const OVERRIDABLE = {
 const STAGES = ['new', 'screening', 'interview', 'offer', 'hired', 'rejected'];
 const DEFAULT_META = { stage: 'new', tags: [], note: null };
 
-// ---- derived search index -------------------------------------------------
-// candidate_index / candidate_skills mirror the candidates table so the list
-// can filter and paginate in SQL. They are written by indexCandidate() from
-// inside remerge/rebuild and torn down alongside the candidate they describe.
+// ---- derived indexes ------------------------------------------------------
+// candidate_index / candidate_skills let the list filter and paginate in SQL;
+// candidate_subjects maps each subject to the candidate holding it. All three
+// are written by indexCandidate() from inside remerge/rebuild and torn down
+// alongside the candidate they describe.
 
 const _insertIndex = db.prepare(
   'INSERT OR REPLACE INTO candidate_index (org_id, candidate_id, sort_name, search_text, overall_confidence) VALUES (?, ?, ?, ?, ?)'
@@ -44,6 +45,8 @@ const _insertIndex = db.prepare(
 const _delIndex = db.prepare('DELETE FROM candidate_index WHERE org_id = ? AND candidate_id = ?');
 const _insertSkill = db.prepare('INSERT INTO candidate_skills (org_id, candidate_id, skill) VALUES (?, ?, ?)');
 const _delSkills = db.prepare('DELETE FROM candidate_skills WHERE org_id = ? AND candidate_id = ?');
+const _insertMember = db.prepare('INSERT OR REPLACE INTO candidate_subjects (org_id, candidate_id, subject_id) VALUES (?, ?, ?)');
+const _delMembers = db.prepare('DELETE FROM candidate_subjects WHERE org_id = ? AND candidate_id = ?');
 
 function sortName(record) {
   return (record.full_name || '').trim().toLowerCase() || null;
@@ -63,9 +66,9 @@ function searchText(record) {
   return parts.filter(Boolean).join(' ').toLowerCase();
 }
 
-// (Re)write the index + skill rows for one candidate. Called for every record
-// written by remerge, inside its transaction.
-function indexCandidate(orgId, record) {
+// (Re)write the index, skill and membership rows for one candidate. Called for
+// every record written by remerge, inside its transaction.
+function indexCandidate(orgId, record, subjectIds) {
   const id = record.candidate_id;
   _delSkills.run(orgId, id);
   _insertIndex.run(orgId, id, sortName(record), searchText(record), record.overall_confidence);
@@ -74,11 +77,13 @@ function indexCandidate(orgId, record) {
     const nm = String(s.name || '').trim().toLowerCase();
     if (nm && !seen.has(nm)) { seen.add(nm); _insertSkill.run(orgId, id, nm); }
   }
+  for (const sid of subjectIds) _insertMember.run(orgId, id, sid);
 }
 
 function unindexCandidate(orgId, candidateId) {
   _delIndex.run(orgId, candidateId);
   _delSkills.run(orgId, candidateId);
+  _delMembers.run(orgId, candidateId);
 }
 
 function escapeLike(s) {
@@ -126,10 +131,15 @@ function affectedClosure(orgId, seedIds) {
     frontier.forEach((id) => affected.add(id));
   }
 
-  for (const row of db.prepare('SELECT subject_ids FROM candidates WHERE org_id = ?').all(orgId)) {
-    const ids = JSON.parse(row.subject_ids);
-    if (ids.some((id) => affected.has(id))) ids.forEach((id) => affected.add(id));
-  }
+  // widen to whole clusters: every subject of every candidate touched so far
+  const ids = [...affected];
+  const marks = ids.map(() => '?').join(',');
+  const members = db.prepare(
+    `SELECT b.subject_id AS id FROM candidate_subjects a
+     JOIN candidate_subjects b ON b.org_id = a.org_id AND b.candidate_id = a.candidate_id
+     WHERE a.org_id = ? AND a.subject_id IN (${marks})`
+  ).all(orgId, ...ids);
+  for (const { id } of members) affected.add(id);
   return [...affected];
 }
 
@@ -137,15 +147,13 @@ function affectedClosure(orgId, seedIds) {
 // they were part of, run entity resolution over the set, write fresh records.
 function remerge(orgId, subjectIds) {
   if (!subjectIds.length) return;
-  const affected = new Set(subjectIds);
+  const marks = subjectIds.map(() => '?').join(',');
 
   const staleCandidates = db
-    .prepare('SELECT candidate_id, subject_ids FROM candidates WHERE org_id = ?')
-    .all(orgId)
-    .filter((row) => JSON.parse(row.subject_ids).some((id) => affected.has(id)))
+    .prepare(`SELECT DISTINCT candidate_id FROM candidate_subjects WHERE org_id = ? AND subject_id IN (${marks})`)
+    .all(orgId, ...subjectIds)
     .map((row) => row.candidate_id);
 
-  const marks = subjectIds.map(() => '?').join(',');
   const rows = db
     .prepare(`SELECT id, subject FROM subjects WHERE org_id = ? AND id IN (${marks}) ORDER BY id`)
     .all(orgId, ...subjectIds);
@@ -176,7 +184,7 @@ function remerge(orgId, subjectIds) {
         JSON.stringify(fieldConf),
         JSON.stringify(cluster.map((s) => s._dbId))
       );
-      indexCandidate(orgId, record); // keep the search index in lockstep
+      indexCandidate(orgId, record, cluster.map((s) => s._dbId)); // keep the derived indexes in lockstep
     }
   })();
 }
@@ -197,6 +205,7 @@ function rebuild(orgId) {
     db.prepare('DELETE FROM candidates WHERE org_id = ?').run(orgId);
     db.prepare('DELETE FROM candidate_index WHERE org_id = ?').run(orgId);
     db.prepare('DELETE FROM candidate_skills WHERE org_id = ?').run(orgId);
+    db.prepare('DELETE FROM candidate_subjects WHERE org_id = ?').run(orgId);
   })();
   remerge(orgId, rows.map((r) => r.id));
   return countCandidates(orgId);
@@ -215,9 +224,10 @@ function ensureConsistent() {
   const keys = db.prepare('SELECT COUNT(*) AS n FROM subject_keys').get().n;
   const candidates = db.prepare('SELECT COUNT(*) AS n FROM candidates').get().n;
   const indexed = db.prepare('SELECT COUNT(*) AS n FROM candidate_index').get().n;
+  const mapped = db.prepare('SELECT COUNT(*) AS n FROM candidate_subjects').get().n;
   // Rebuild if a derived table is missing/empty — covers fresh migrations and
-  // databases that predate the search index (candidates present, index empty).
-  if (subjects > 0 && (keys === 0 || candidates === 0 || indexed === 0)) rebuildAll();
+  // databases that predate an index (candidates present, index empty).
+  if (subjects > 0 && (keys === 0 || candidates === 0 || indexed === 0 || mapped === 0)) rebuildAll();
 }
 
 // Overlay manual corrections on a freshly merged record. An override always
@@ -692,15 +702,14 @@ function purgeExpired(orgId, { force = false, dryRun = false } = {}) {
   // against subjects.created_at is valid.
   const cutoff = db.prepare("SELECT datetime('now', ?) AS c").get(`-${retention_days} days`).c;
 
-  const rows = db.prepare('SELECT candidate_id, subject_ids FROM candidates WHERE org_id = ?').all(orgId);
-  const expired = [];
-  for (const row of rows) {
-    const ids = JSON.parse(row.subject_ids);
-    if (!ids.length) continue;
-    const marks = ids.map(() => '?').join(',');
-    const newest = db.prepare(`SELECT MAX(created_at) AS m FROM subjects WHERE org_id = ? AND id IN (${marks})`).get(orgId, ...ids).m;
-    if (newest && newest < cutoff) expired.push(row.candidate_id);
-  }
+  // one aggregate: candidates whose newest source subject is older than cutoff
+  const expired = db.prepare(
+    `SELECT cs.candidate_id FROM candidate_subjects cs
+     JOIN subjects s ON s.org_id = cs.org_id AND s.id = cs.subject_id
+     WHERE cs.org_id = ?
+     GROUP BY cs.candidate_id
+     HAVING MAX(s.created_at) < ?`
+  ).all(orgId, cutoff).map((r) => r.candidate_id);
 
   const blocked = !force && expired.length > total * AUTO_PURGE_MAX_SHARE;
   if (dryRun || blocked || !expired.length) return { purged: 0, expired: expired.length, total, blocked };
@@ -841,10 +850,8 @@ function subjectIdsOf(orgId, candidateId) {
 }
 
 function candidateContaining(orgId, subjectId) {
-  for (const row of db.prepare('SELECT candidate_id, subject_ids FROM candidates WHERE org_id = ?').all(orgId)) {
-    if (JSON.parse(row.subject_ids).includes(subjectId)) return getCandidate(orgId, row.candidate_id);
-  }
-  return null;
+  const row = db.prepare('SELECT candidate_id FROM candidate_subjects WHERE org_id = ? AND subject_id = ?').get(orgId, subjectId);
+  return row ? getCandidate(orgId, row.candidate_id) : null;
 }
 
 // Force-merge two candidates: record a human link over the union of their

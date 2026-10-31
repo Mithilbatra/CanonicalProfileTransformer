@@ -7,6 +7,7 @@ process.env.SILENCE_LOGS = '1';
 const test = require('node:test');
 const assert = require('node:assert');
 const { extractSources } = require('../server/engine/pipeline');
+const { db } = require('../server/db');
 const store = require('../server/store');
 const auth = require('../server/auth');
 
@@ -83,6 +84,32 @@ test('blocking: a shared surname and employer alone never pair two people', asyn
   store.ingestSources(org, r.sourceResults);
   assert.equal(store.listCandidates(org).length, 2);
   assert.equal(store.findMergeSuggestions(org).length, 0, 'different first names are never compared');
+});
+
+// candidate_subjects must always be the exact inverse of candidates.subject_ids
+function assertMembershipInSync(org) {
+  const fromLists = db.prepare(
+    'SELECT c.candidate_id, je.value AS subject_id FROM candidates c, json_each(c.subject_ids) je WHERE c.org_id = ? ORDER BY 2'
+  ).all(org);
+  const indexed = db.prepare('SELECT candidate_id, subject_id FROM candidate_subjects WHERE org_id = ? ORDER BY 2').all(org);
+  assert.deepEqual(indexed, fromLists);
+}
+
+test('the subject→candidate index stays exact through merge, rebuild, undo and delete', async () => {
+  const org = auth.register('index@merge.test', 'longpassword', 'Index Co').org_id;
+  const r = await extractSources([{ name: 'people.csv', content: CSV }]);
+  store.ingestSources(org, r.sourceResults);
+  assertMembershipInSync(org);
+  const [x, y] = store.listCandidates(org).map((c) => c.candidate_id);
+  const { link_id } = store.mergeCandidates(org, x, y, 'index@merge.test');
+  assertMembershipInSync(org);
+  store.rebuild(org);
+  assertMembershipInSync(org);
+  store.undoMerge(org, link_id);
+  assertMembershipInSync(org);
+  store.deleteCandidate(org, store.listCandidates(org)[0].candidate_id);
+  assertMembershipInSync(org);
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM candidate_subjects WHERE org_id = ?').get(org).n, 1);
 });
 
 test('merge validation: cannot merge a candidate with itself / a missing id', () => {

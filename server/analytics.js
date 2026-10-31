@@ -48,18 +48,11 @@ function insights(orgId) {
   // where the data came from: clean source types (csv, ats, github, resume,
   // …) read from the subjects behind each candidate — one tally per candidate
   // per distinct source type that fed it.
-  const subjType = new Map();
-  for (const s of db.prepare('SELECT id, source_type FROM subjects WHERE org_id = ?').all(orgId)) {
-    subjType.set(s.id, s.source_type);
-  }
-  const sourceCounts = new Map();
-  for (const row of db.prepare('SELECT subject_ids FROM candidates WHERE org_id = ?').all(orgId)) {
-    const types = new Set(JSON.parse(row.subject_ids).map((id) => subjType.get(id)).filter(Boolean));
-    for (const t of types) sourceCounts.set(t, (sourceCounts.get(t) || 0) + 1);
-  }
-  const sourceMix = [...sourceCounts.entries()]
-    .map(([type, count]) => ({ type, count }))
-    .sort((a, b) => b.count - a.count);
+  const sourceMix = db.prepare(
+    `SELECT s.source_type AS type, COUNT(DISTINCT cs.candidate_id) AS count
+     FROM candidate_subjects cs JOIN subjects s ON s.org_id = cs.org_id AND s.id = cs.subject_id
+     WHERE cs.org_id = ? GROUP BY s.source_type ORDER BY count DESC, type`
+  ).all(orgId);
 
   // activity: how many matches were run, and how many of them bias-blind
   const matchRows = db
