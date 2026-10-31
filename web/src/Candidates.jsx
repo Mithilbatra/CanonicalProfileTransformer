@@ -1,16 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { api, downloadFile } from './api';
 import { useToast } from './Toast';
-import { Meter, ConfTag, Provenance, provIndex, confColor, EMPTY, hasText, CountUp } from './bits';
+import { Meter, ConfTag, Provenance, provIndex, confColor, EMPTY, hasText, CountUp, STAGE_LABEL } from './bits';
 
 // The persistent candidate database: upload sources, move candidates through
 // the hiring pipeline, tag/annotate them, bulk-act on a selection, match
 // against a job description (optionally bias-blind), and export.
-
-const STAGE_LABEL = {
-  new: 'New', screening: 'Screening', interview: 'Interview',
-  offer: 'Offer', hired: 'Hired', rejected: 'Rejected',
-};
 
 const PAGE_SIZE = 50;
 

@@ -1,14 +1,9 @@
 import { useEffect, useState } from 'react';
 import { api } from './api';
-import { confColor } from './bits';
+import { confColor, STAGE_LABEL } from './bits';
 
 // Screening analytics dashboard — plain CSS bars, no chart library. Reads the
 // org's funnel, confidence distribution, skill supply and source mix.
-
-const STAGE_LABEL = {
-  new: 'New', screening: 'Screening', interview: 'Interview',
-  offer: 'Offer', hired: 'Hired', rejected: 'Rejected',
-};
 
 export default function Insights() {
   const [data, setData] = useState(null);

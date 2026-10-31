@@ -1,16 +1,11 @@
 import { useCallback, useEffect, useState } from 'react';
 import { api } from './api';
 import { useToast } from './Toast';
-import { confColor } from './bits';
+import { confColor, STAGE_LABEL } from './bits';
 
 // Job requisitions: create a role with its JD, then run a per-job hiring
 // pipeline. A candidate's stage here is scoped to the job (independent of
 // their stage on other jobs and of the global candidate-database stage).
-
-const STAGE_LABEL = {
-  new: 'New', screening: 'Screening', interview: 'Interview',
-  offer: 'Offer', hired: 'Hired', rejected: 'Rejected',
-};
 
 export default function Jobs() {
   const toast = useToast();

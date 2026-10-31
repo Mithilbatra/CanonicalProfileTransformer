@@ -105,3 +105,9 @@ export function FieldRow({ label, children, confidence, prov }) {
 export function hasText(v) {
   return v !== null && v !== undefined && String(v).trim() !== '';
 }
+
+// Display names for the hiring-pipeline stages, shared by every view.
+export const STAGE_LABEL = {
+  new: 'New', screening: 'Screening', interview: 'Interview',
+  offer: 'Offer', hired: 'Hired', rejected: 'Rejected',
+};
