@@ -14,7 +14,7 @@ const store = require('../server/store');
 const auth = require('../server/auth');
 const ai = require('../server/ai');
 const logger = require('../server/lib/logger');
-const { bufferToText } = require('../server/lib/filetext');
+const { bufferToText, withTimeout } = require('../server/lib/filetext');
 
 const SAMPLES = path.join(__dirname, '..', 'samples');
 const read = (f) => fs.readFileSync(path.join(SAMPLES, f), 'utf8');
@@ -109,6 +109,13 @@ test('upload guard: an oversized image is refused before OCR runs', async () => 
   const png = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47]), Buffer.alloc(2048)]);
   await assert.rejects(() => bufferToText(png, 'photo.png'), /too large to OCR/);
   if (prev == null) delete process.env.MAX_OCR_MB; else process.env.MAX_OCR_MB = prev;
+});
+
+test('withTimeout: stops slow work through its cleanup hook; fast work passes through', async () => {
+  let stopped = false;
+  await assert.rejects(() => withTimeout(new Promise(() => {}), 20, 'too slow', () => { stopped = true; }), /too slow/);
+  assert.equal(stopped, true, 'the hook ran, so an OCR worker would be terminated');
+  assert.equal(await withTimeout(Promise.resolve(7), 1000, 'unused', () => { throw new Error('must not run'); }), 7);
 });
 
 test('retention purge: trims expired candidates, but a mass purge waits for an admin', () => {

@@ -8,7 +8,7 @@ const helmet = require('helmet');
 const multer = require('multer');
 const Papa = require('papaparse');
 const { runPipeline, extractSources, DEFAULT_CONFIG } = require('./engine/pipeline');
-const { bufferToText } = require('./lib/filetext');
+const { bufferToText, withTimeout } = require('./lib/filetext');
 const { matchCandidates } = require('./engine/match');
 const { suggestImprovements } = require('./engine/suggest');
 const { insights } = require('./analytics');
@@ -113,15 +113,6 @@ const upload = multer({
   storage: multer.memoryStorage(),
   limits: { files: MAX_UPLOAD_FILES, fileSize: MAX_UPLOAD_MB * 1024 * 1024 },
 });
-
-// Bound a slow extraction so one pathological file can't wedge the request.
-// The underlying work isn't hard-killed (that needs a worker), but the request
-// is freed and the file is reported as failed rather than hanging.
-function withTimeout(promise, ms, message) {
-  let t;
-  const timeout = new Promise((_, reject) => { t = setTimeout(() => reject(new Error(message)), ms); });
-  return Promise.race([promise, timeout]).finally(() => clearTimeout(t));
-}
 
 function readIf(p) {
   try { return fs.readFileSync(p, 'utf8'); } catch { return null; }
@@ -338,7 +329,8 @@ app.post('/api/upload', auth.requireAuth, canWrite, upload.array('files'), async
     }
     // Convert each file to text under a timeout. A file that fails (corrupt,
     // scanned PDF, too large to OCR, or too slow) is reported and skipped
-    // rather than failing the whole upload.
+    // rather than failing the whole upload. OCR is killed on timeout.
+    // shortcut: PDF/DOCX parse on the main thread, so a timeout frees the request but can't stop that work; move parsing to a worker_thread if hostile files show up.
     const sources = [];
     const failed = [];
     for (const f of req.files) {

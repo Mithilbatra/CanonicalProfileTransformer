@@ -84,6 +84,17 @@ async function bufferToText(buffer, name = '') {
   return { text: buffer.toString('utf8'), kind, links: [] };
 }
 
+// Bound a slow promise: after `ms` it rejects with `message` and runs
+// `onTimeout` (e.g. to kill the worker doing the job), so the work is stopped,
+// not just abandoned.
+function withTimeout(promise, ms, message, onTimeout) {
+  let t;
+  const timeout = new Promise((_, reject) => {
+    t = setTimeout(() => { if (onTimeout) onTimeout(); reject(new Error(message)); }, ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(t));
+}
+
 // OCR for photographed/scanned resumes uploaded as images. tesseract.js is
 // loaded lazily — it is a heavy module and most uploads never need it.
 // The first run downloads the English model (~10MB) into data/ocr-cache.
@@ -103,11 +114,13 @@ async function ocrImage(buffer) {
   const path = require('path');
   const cache = process.env.OCR_CACHE || path.join(__dirname, '..', '..', 'data', 'ocr-cache');
   const worker = await createWorker('eng', 1, { cachePath: cache });
+  const stop = () => worker.terminate().catch(() => {}); // runs on timeout and in finally; the second call is a no-op
+  const ms = Number(process.env.EXTRACT_TIMEOUT_MS || 45000);
   try {
-    const { data } = await worker.recognize(buffer);
+    const { data } = await withTimeout(worker.recognize(buffer), ms, `OCR timed out after ${ms / 1000}s`, stop);
     return { text: data.text || '' };
   } finally {
-    await worker.terminate();
+    await stop();
   }
 }
 
@@ -115,4 +128,4 @@ function isBinaryName(name = '') {
   return /\.(pdf|docx|jpe?g|png)$/i.test(name);
 }
 
-module.exports = { bufferToText, isBinaryName, sniffKind, extractPdfLinks };
+module.exports = { bufferToText, isBinaryName, sniffKind, extractPdfLinks, withTimeout };
