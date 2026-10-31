@@ -1,7 +1,7 @@
 # Deploy to Fly.io:  fly launch --no-deploy  (then edit)  ->  fly deploy
 # A persistent volume keeps the SQLite database across restarts.
 app = "profile-transformer"
-primary_region = "iad"
+primary_region = "bom"
 
 [build]
   dockerfile = "Dockerfile"
@@ -20,12 +20,12 @@ primary_region = "iad"
   auto_start_machines = true
   min_machines_running = 1
 
-  [http_service.checks]
-    [http_service.checks.health]
-      method = "get"
-      path = "/api/health"
-      interval = "30s"
-      timeout = "4s"
+  [[http_service.checks]]
+    method = "GET"
+    path = "/api/health"
+    interval = "30s"
+    timeout = "4s"
+    grace_period = "5s"
 
 # Create the volume once:  fly volumes create cpt_data --size 1
 [[mounts]]
