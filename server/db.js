@@ -125,6 +125,7 @@ db.exec(`
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
   CREATE INDEX IF NOT EXISTS idx_audit_org ON audit(org_id, id DESC);
+  CREATE INDEX IF NOT EXISTS idx_audit_action ON audit(org_id, action);
 
   -- Workflow metadata layered on a candidate: hiring pipeline stage, free
   -- tags, and a private note. Keyed by candidate_id (stable hash), so it

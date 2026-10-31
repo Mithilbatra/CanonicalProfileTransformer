@@ -55,13 +55,12 @@ function insights(orgId) {
   ).all(orgId);
 
   // activity: how many matches were run, and how many of them bias-blind
-  const matchRows = db
-    .prepare("SELECT detail FROM audit WHERE org_id = ? AND action = 'candidates.match'")
-    .all(orgId);
-  let blindMatches = 0;
-  for (const row of matchRows) {
-    try { if (JSON.parse(row.detail || '{}').blind) blindMatches++; } catch { /* ignore */ }
-  }
+  // (counted in SQL; json_valid guards rows whose detail isn't JSON)
+  const activity = db.prepare(
+    `SELECT COUNT(*) AS matches,
+            COALESCE(SUM(CASE WHEN json_valid(detail) THEN json_extract(detail, '$.blind') = 1 ELSE 0 END), 0) AS blindMatches
+     FROM audit WHERE org_id = ? AND action = 'candidates.match'`
+  ).get(orgId);
 
   return {
     total,
@@ -70,7 +69,7 @@ function insights(orgId) {
     confidenceBands: bands.map(({ label, count }) => ({ label, count })),
     topSkills,
     sourceMix,
-    activity: { matches: matchRows.length, blindMatches },
+    activity,
   };
 }
 

@@ -10,6 +10,7 @@ const { extractSources } = require('../server/engine/pipeline');
 const store = require('../server/store');
 const auth = require('../server/auth');
 const analytics = require('../server/analytics');
+const audit = require('../server/audit');
 const { extractRequirements, scoreCandidate, estimateTenureYears } = require('../server/engine/match');
 const { rateLimit } = require('../server/lib/ratelimit');
 
@@ -142,6 +143,12 @@ test('insights: funnel, confidence bands, top skills, source mix', async () => {
   assert.ok(ins.topSkills.some((s) => s.name === 'Python'));
   assert.ok(ins.sourceMix.some((m) => m.type === 'ats'));
   assert.ok(ins.avgConfidence > 0 && ins.avgConfidence <= 1);
+
+  // activity counts every match run, and how many were bias-blind
+  audit.record(org, 'a@insights.test', 'candidates.match', null, { blind: true });
+  audit.record(org, 'a@insights.test', 'candidates.match', null, { blind: false });
+  audit.record(org, 'a@insights.test', 'candidates.match', null, null);
+  assert.deepEqual(analytics.insights(org).activity, { matches: 3, blindMatches: 1 });
 });
 
 test('rate limiter blocks past the max within the window', () => {
