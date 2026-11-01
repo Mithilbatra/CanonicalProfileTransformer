@@ -782,6 +782,10 @@ app.get('/api/export.xlsx', auth.requireAuth, async (req, res) => {
 
 app.get('/api/health', (_req, res) => res.json({ ok: true }));
 
+// Unknown API paths get a JSON 404. Without this they fell through to the SPA
+// page (200 + HTML) and the client parsed HTML as data: the Jobs blank screen.
+app.use('/api', (_req, res) => res.status(404).json({ error: 'not found' }));
+
 // JSON for anything that slipped past a route's own try/catch — notably
 // multer limit errors (too many files / file too large), which are thrown
 // before the handler body runs.
